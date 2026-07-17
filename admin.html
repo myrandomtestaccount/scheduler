@@ -34,6 +34,7 @@
         <div class="tabs" role="tablist" aria-label="Admin sections">
           <button class="tab-button active" type="button" data-tab="users">Users</button>
           <button class="tab-button" type="button" data-tab="schedules">Schedules</button>
+          <button class="tab-button" type="button" data-tab="shifts">Shift presets</button>
           <button class="tab-button" type="button" data-tab="systems">Systems / apps</button>
           <button class="tab-button" type="button" data-tab="holidays">Holidays</button>
           <button class="tab-button" type="button" data-tab="data">Data</button>
@@ -53,19 +54,14 @@
         <section id="schedulesTab" class="tab-panel">
           <div class="admin-grid">
             <form id="addScheduleForm" class="schedule-form card-form">
-              <h3>Weekly schedule</h3>
+              <h3>Add schedule</h3>
               <label class="field">
                 <span>User</span>
                 <select id="scheduleUserSelect"></select>
               </label>
               <label class="field">
                 <span>Quick shift</span>
-                <select id="shiftTemplateSelect">
-                  <option value="early">Early shift · 07:00–15:00</option>
-                  <option value="regular" selected>Regular shift · 09:00–17:00</option>
-                  <option value="late">Late shift · 11:00–19:00</option>
-                  <option value="custom">Custom time</option>
-                </select>
+                <select id="shiftTemplateSelect"></select>
               </label>
               <fieldset>
                 <legend>Days in Eastern Time</legend>
@@ -86,24 +82,33 @@
                 <input id="schedulePriorityInput" type="number" min="1" step="1" value="1" required>
               </label>
               <button class="primary-button" type="submit">Add schedule</button>
+              <p class="help-text">Use a preset to save time, or choose custom times. Click the graph to prefill a user, day, and time.</p>
             </form>
 
             <div class="card-form">
-              <h3>Day timeline</h3>
+              <h3>Schedule graph</h3>
               <div class="two-columns">
+                <label class="field">
+                  <span>View</span>
+                  <select id="scheduleViewSelect">
+                    <option value="day">Day view · all users</option>
+                    <option value="week">Week view · all users</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Starting date</span>
+                  <input id="timelineDateInput" type="date">
+                </label>
+              </div>
+              <div class="timeline-help">Day view: click a user row to prefill a 30-minute schedule. Week view: click a day cell to prefill that user/day.</div>
+              <div id="timelineCanvas" class="schedule-graph" aria-label="Schedule graph"></div>
+
+              <form id="addSlotForm" class="slot-form">
+                <h3>Breaks and extra slots</h3>
                 <label class="field">
                   <span>User</span>
                   <select id="timelineUserSelect"></select>
                 </label>
-                <label class="field">
-                  <span>Date</span>
-                  <input id="timelineDateInput" type="date">
-                </label>
-              </div>
-              <div class="timeline-help">Click the timeline to prefill a 30-minute slot.</div>
-              <div id="timelineCanvas" class="timeline" role="button" tabindex="0" aria-label="Schedule timeline"></div>
-
-              <form id="addSlotForm" class="slot-form">
                 <div class="three-columns">
                   <label class="field">
                     <span>Slot type</span>
@@ -130,10 +135,30 @@
             </div>
           </div>
 
-          <h3>Schedules</h3>
-          <div id="scheduleList" class="stack-list"></div>
+          <h3>Weekly schedule summary</h3>
+          <div id="scheduleList" class="schedule-summary"></div>
           <h3>Breaks and extra slots</h3>
           <div id="slotsList" class="stack-list"></div>
+        </section>
+
+        <section id="shiftsTab" class="tab-panel">
+          <form id="addShiftForm" class="inline-form">
+            <label class="field">
+              <span>Preset name</span>
+              <input id="shiftNameInput" type="text" placeholder="Example: Mid shift" required>
+            </label>
+            <label class="field">
+              <span>Start</span>
+              <input id="shiftStartInput" type="time" value="09:00" required>
+            </label>
+            <label class="field">
+              <span>End</span>
+              <input id="shiftEndInput" type="time" value="17:00" required>
+            </label>
+            <button class="primary-button" type="submit">Add shift preset</button>
+          </form>
+          <p class="help-text">Presets only speed up schedule entry. Any user can still have a custom shift on any day.</p>
+          <div id="shiftsList" class="stack-list"></div>
         </section>
 
         <section id="systemsTab" class="tab-panel">

@@ -20,8 +20,11 @@ Open `admin.html` for admin tools.
 - Mark a selected SME assigned and advance the queue.
 - Admin tools live on a separate `admin.html` page.
 - Admins can add/remove users, systems/apps, schedules, breaks, extra slots, and holidays.
-- Schedules support quick `Early`, `Regular`, and `Late` shift templates.
-- Timeline view lets admins click a day graph to prefill breaks or extra coverage slots.
+- Admins can define what shift presets like `Early`, `Regular`, and `Late` mean.
+- Shift presets only save time; any user can still have a custom shift on any day.
+- Schedules support different shifts for the same user on different days.
+- Schedule graph supports day view and week view for all users.
+- Day graph rows are ordered by the user list and can be clicked to prefill schedule entry.
 - Export/import JSON backups.
 
 ## Data Storage
@@ -47,7 +50,8 @@ Click `Admin tools` from the main page, or open `admin.html` directly.
 Admin sections:
 
 - `Users`: add/remove team members.
-- `Schedules`: add weekly schedules, choose quick shifts, add breaks, add extra coverage slots, and review the timeline graph.
+- `Schedules`: add weekly schedules, click the all-user graph to prefill user/day/time, add breaks, add extra coverage slots, and review readable user-by-user schedules.
+- `Shift presets`: define reusable shift names and times.
 - `Systems / apps`: add systems and assign/reorder primary SMEs.
 - `Holidays`: add user-specific or all-team holidays.
 - `Data`: export/import JSON backups.

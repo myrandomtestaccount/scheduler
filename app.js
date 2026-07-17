@@ -6,12 +6,11 @@ const TIMELINE_START_MINUTES = 6 * 60;
 const TIMELINE_END_MINUTES = 22 * 60;
 const SLOT_MINUTES = 30;
 
-const SHIFT_TEMPLATES = {
-  early: { label: "Early shift", start: "07:00", end: "15:00" },
-  regular: { label: "Regular shift", start: "09:00", end: "17:00" },
-  late: { label: "Late shift", start: "11:00", end: "19:00" },
-  custom: { label: "Custom time", start: "09:00", end: "17:00" }
-};
+const DEFAULT_SHIFT_TEMPLATES = [
+  { id: "early", name: "Early shift", start: "07:00", end: "15:00" },
+  { id: "regular", name: "Regular shift", start: "09:00", end: "17:00" },
+  { id: "late", name: "Late shift", start: "11:00", end: "19:00" }
+];
 
 const defaultData = {
   users: [
@@ -45,6 +44,7 @@ const defaultData = {
     "external-system": 0,
     "internal-api": 0
   },
+  shiftTemplates: DEFAULT_SHIFT_TEMPLATES,
   exceptions: [],
   holidays: [],
   assignmentLog: []
@@ -76,6 +76,12 @@ const elements = {
   scheduleEndInput: document.querySelector("#scheduleEndInput"),
   schedulePriorityInput: document.querySelector("#schedulePriorityInput"),
   scheduleList: document.querySelector("#scheduleList"),
+  addShiftForm: document.querySelector("#addShiftForm"),
+  shiftNameInput: document.querySelector("#shiftNameInput"),
+  shiftStartInput: document.querySelector("#shiftStartInput"),
+  shiftEndInput: document.querySelector("#shiftEndInput"),
+  shiftsList: document.querySelector("#shiftsList"),
+  scheduleViewSelect: document.querySelector("#scheduleViewSelect"),
   timelineUserSelect: document.querySelector("#timelineUserSelect"),
   timelineDateInput: document.querySelector("#timelineDateInput"),
   timelineCanvas: document.querySelector("#timelineCanvas"),
@@ -119,9 +125,11 @@ function bindEvents() {
   on(elements.markAssignedButton, "click", markSelectedAssigned);
   on(elements.addUserForm, "submit", addUser);
   on(elements.addScheduleForm, "submit", addSchedule);
+  on(elements.addShiftForm, "submit", addShiftTemplate);
   on(elements.shiftTemplateSelect, "change", applyShiftTemplate);
   on(elements.scheduleStartInput, "input", () => elements.shiftTemplateSelect.value = "custom");
   on(elements.scheduleEndInput, "input", () => elements.shiftTemplateSelect.value = "custom");
+  on(elements.scheduleViewSelect, "change", renderTimelineTools);
   on(elements.timelineUserSelect, "change", renderTimelineTools);
   on(elements.timelineDateInput, "change", renderTimelineTools);
   on(elements.timelineCanvas, "click", prefillSlotFromTimeline);
@@ -155,6 +163,8 @@ function render() {
   saveData();
   renderSystemSelect();
   renderUserSelectors();
+  renderShiftTemplateSelect();
+  renderShifts();
   renderUsers();
   renderSchedules();
   renderSystems();
@@ -235,6 +245,66 @@ function fillUserSelect(select, includeAllUsers = false) {
   if ([...select.options].some((option) => option.value === selectedValue)) {
     select.value = selectedValue;
   }
+}
+
+function renderShiftTemplateSelect() {
+  if (!elements.shiftTemplateSelect) {
+    return;
+  }
+
+  const selectedValue = elements.shiftTemplateSelect.value || "regular";
+  elements.shiftTemplateSelect.innerHTML = "";
+
+  data.shiftTemplates.forEach((template) => {
+    const option = document.createElement("option");
+    option.value = template.id;
+    option.textContent = `${template.name} · ${template.start}–${template.end}`;
+    elements.shiftTemplateSelect.append(option);
+  });
+
+  const customOption = document.createElement("option");
+  customOption.value = "custom";
+  customOption.textContent = "Custom time";
+  elements.shiftTemplateSelect.append(customOption);
+
+  elements.shiftTemplateSelect.value = data.shiftTemplates.some((template) => template.id === selectedValue)
+    ? selectedValue
+    : "custom";
+}
+
+function renderShifts() {
+  if (!elements.shiftsList) {
+    return;
+  }
+
+  const rows = data.shiftTemplates.map((template) => `
+    <div class="shift-row" data-shift-id="${escapeHtml(template.id)}">
+      <label class="field">
+        <span>Name</span>
+        <input class="shift-name-field" type="text" value="${escapeHtml(template.name)}">
+      </label>
+      <label class="field">
+        <span>Start</span>
+        <input class="shift-start-field" type="time" value="${escapeHtml(template.start)}">
+      </label>
+      <label class="field">
+        <span>End</span>
+        <input class="shift-end-field" type="time" value="${escapeHtml(template.end)}">
+      </label>
+      <div class="item-actions">
+        <button class="small-button" type="button" data-action="update-shift" data-shift-id="${escapeHtml(template.id)}">Update</button>
+        <button class="remove-button" type="button" data-action="remove-shift" data-shift-id="${escapeHtml(template.id)}">Remove</button>
+      </div>
+    </div>
+  `).join("");
+
+  elements.shiftsList.innerHTML = rows || emptyState("No shift presets yet.");
+  elements.shiftsList.querySelectorAll("[data-action='update-shift']").forEach((button) => {
+    button.addEventListener("click", () => updateShiftTemplate(button.dataset.shiftId));
+  });
+  elements.shiftsList.querySelectorAll("[data-action='remove-shift']").forEach((button) => {
+    button.addEventListener("click", () => removeShiftTemplate(button.dataset.shiftId));
+  });
 }
 
 function renderSuggestion(queueState) {
@@ -363,21 +433,36 @@ function renderSchedules() {
     return;
   }
 
-  const rows = data.users.flatMap((user) => {
-    return user.schedules.map((schedule) => {
+  const rows = data.users.map((user) => {
+    const dayRows = DAYS.map((day) => {
+      const schedules = user.schedules.filter((schedule) => schedule.days.includes(day));
+      const pills = schedules.map((schedule) => `
+        <span class="schedule-pill">
+          ${escapeHtml(getShiftLabel(schedule.shiftType))} · ${schedule.start}–${schedule.end}
+          <button type="button" data-action="remove-schedule" data-user-id="${escapeHtml(user.id)}" data-schedule-id="${escapeHtml(schedule.id)}" aria-label="Remove ${escapeHtml(day)} schedule">×</button>
+        </span>
+      `).join("");
+
       return `
-        <div class="list-item">
-          <div>
-            <div class="item-title">${escapeHtml(user.name)} · ${escapeHtml(getShiftLabel(schedule.shiftType))}</div>
-            <div class="meta">${escapeHtml(schedule.days.join(", "))} · ${schedule.start}–${schedule.end} ET · Priority ${schedule.priority}</div>
-          </div>
-          <button class="remove-button" type="button" data-action="remove-schedule" data-user-id="${escapeHtml(user.id)}" data-schedule-id="${escapeHtml(schedule.id)}">Remove</button>
+        <div class="schedule-day-row">
+          <div class="schedule-day-name">${day.slice(0, 3)}</div>
+          <div class="schedule-day-slots">${pills || "<span class=\"meta\">No schedule</span>"}</div>
         </div>
       `;
-    });
+    }).join("");
+
+    return `
+      <article class="schedule-user-card">
+        <div class="section-heading tight">
+          <h3>${escapeHtml(user.name)}</h3>
+          <span class="meta">${user.schedules.length} schedule block${user.schedules.length === 1 ? "" : "s"}</span>
+        </div>
+        ${dayRows}
+      </article>
+    `;
   }).join("");
 
-  elements.scheduleList.innerHTML = rows || emptyState("Add a schedule block.");
+  elements.scheduleList.innerHTML = rows || emptyState("Add users before creating schedules.");
   elements.scheduleList.querySelectorAll("[data-action='remove-schedule']").forEach((button) => {
     button.addEventListener("click", () => removeSchedule(button.dataset.userId, button.dataset.scheduleId));
   });
@@ -393,34 +478,113 @@ function renderTimelineTools() {
 }
 
 function renderTimeline() {
-  if (!elements.timelineCanvas || !elements.timelineUserSelect || !elements.timelineDateInput) {
+  if (!elements.timelineCanvas || !elements.timelineDateInput) {
     return;
   }
 
-  const user = data.users.find((item) => item.id === elements.timelineUserSelect.value);
   const date = elements.timelineDateInput.value || getEasternNow().date;
-  if (!user) {
-    elements.timelineCanvas.innerHTML = "";
+  const view = elements.scheduleViewSelect?.value || "day";
+
+  if (view === "week") {
+    renderWeekScheduleGraph(date);
     return;
   }
 
+  renderDayScheduleGraph(date);
+}
+
+function renderDayScheduleGraph(date) {
   const day = getDayNameFromDate(date);
-  const blocks = [];
+  const rows = data.users.map((user) => {
+    const blocks = getGraphBlocksForUser(user, date, day)
+      .map((block) => graphBlock(block.start, block.end, block.type, block.label))
+      .join("");
+
+    return `
+      <div class="graph-row">
+        <div class="graph-user">${escapeHtml(user.name)}</div>
+        <div class="graph-lane" data-user-id="${escapeHtml(user.id)}" data-date="${escapeHtml(date)}">
+          ${blocks || "<span class=\"graph-empty\">Click to add</span>"}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  elements.timelineCanvas.className = "schedule-graph day-graph";
+  elements.timelineCanvas.innerHTML = `
+    <div class="graph-time-axis">
+      <span>06:00</span><span>08:00</span><span>10:00</span><span>12:00</span><span>14:00</span><span>16:00</span><span>18:00</span><span>20:00</span><span>22:00</span>
+    </div>
+    ${rows || emptyState("Add users before viewing schedules.")}
+  `;
+}
+
+function renderWeekScheduleGraph(date) {
+  const weekDates = getWeekDates(date);
+  const header = weekDates.map((weekDate) => `
+    <div class="week-header-cell">
+      <strong>${getDayNameFromDate(weekDate).slice(0, 3)}</strong>
+      <span>${weekDate.slice(5)}</span>
+    </div>
+  `).join("");
+
+  const rows = data.users.map((user) => {
+    const cells = weekDates.map((weekDate) => {
+      const day = getDayNameFromDate(weekDate);
+      const blocks = getGraphBlocksForUser(user, weekDate, day)
+        .filter((block) => block.type !== "break")
+        .map((block) => `<span class="week-pill ${block.type}">${escapeHtml(block.label)} · ${block.start}–${block.end}</span>`)
+        .join("");
+
+      return `
+        <button class="week-cell" type="button" data-user-id="${escapeHtml(user.id)}" data-date="${escapeHtml(weekDate)}">
+          ${blocks || "<span class=\"meta\">No schedule</span>"}
+        </button>
+      `;
+    }).join("");
+
+    return `
+      <div class="week-row">
+        <div class="graph-user">${escapeHtml(user.name)}</div>
+        ${cells}
+      </div>
+    `;
+  }).join("");
+
+  elements.timelineCanvas.className = "schedule-graph week-graph";
+  elements.timelineCanvas.innerHTML = `
+    <div class="week-row week-header">
+      <div class="graph-user">User</div>
+      ${header}
+    </div>
+    ${rows || emptyState("Add users before viewing schedules.")}
+  `;
+}
+
+function getGraphBlocksForUser(user, date, day) {
   const holidays = getHolidaysForUser(user.id, date);
-
-  getScheduleWindowsForDate(user, date, day)
-    .filter((window) => window.source === "schedule")
-    .forEach((window) => blocks.push(timelineBlock(window.start, window.end, "schedule", "Schedule")));
-
-  data.exceptions
-    .filter((slot) => slot.userId === user.id && slot.date === date)
-    .forEach((slot) => blocks.push(timelineBlock(slot.start, slot.end, slot.type, slot.type === "break" ? "Break" : "Extra")));
-
   if (holidays.length > 0) {
-    blocks.push(`<div class="timeline-block holiday">Holiday: ${escapeHtml(holidays.map((holiday) => holiday.name || "Holiday").join(", "))}</div>`);
+    return [{ type: "holiday", start: "06:00", end: "22:00", label: holidays.map((holiday) => holiday.name || "Holiday").join(", ") }];
   }
 
-  elements.timelineCanvas.innerHTML = blocks.join("");
+  const scheduleBlocks = getScheduleWindowsForDate(user, date, day)
+    .map((window) => ({
+      type: window.source === "extra" ? "extra" : "schedule",
+      start: window.start,
+      end: window.end,
+      label: window.source === "extra" ? "Extra" : "Schedule"
+    }));
+
+  const breakBlocks = data.exceptions
+    .filter((slot) => slot.userId === user.id && slot.date === date && slot.type === "break")
+    .map((slot) => ({
+      type: "break",
+      start: slot.start,
+      end: slot.end,
+      label: slot.reason || "Break"
+    }));
+
+  return scheduleBlocks.concat(breakBlocks).sort((left, right) => toMinutes(left.start) - toMinutes(right.start));
 }
 
 function renderSlots() {
@@ -546,6 +710,69 @@ function renderDataPreview() {
   elements.dataPreview.value = JSON.stringify(data, null, 2);
 }
 
+function addShiftTemplate(event) {
+  event.preventDefault();
+  const name = elements.shiftNameInput.value.trim();
+  const start = elements.shiftStartInput.value;
+  const end = elements.shiftEndInput.value;
+
+  if (!name || !isValidTimeRange(start, end)) {
+    window.alert("Add a shift name and valid start/end times.");
+    return;
+  }
+
+  data.shiftTemplates.push({
+    id: makeId(name, data.shiftTemplates.map((template) => template.id)),
+    name,
+    start,
+    end
+  });
+
+  elements.addShiftForm.reset();
+  elements.shiftStartInput.value = "09:00";
+  elements.shiftEndInput.value = "17:00";
+  render();
+}
+
+function updateShiftTemplate(shiftId) {
+  const row = elements.shiftsList.querySelector(`[data-shift-id="${cssEscape(shiftId)}"]`);
+  const template = data.shiftTemplates.find((item) => item.id === shiftId);
+  if (!row || !template) {
+    return;
+  }
+
+  const name = row.querySelector(".shift-name-field").value.trim();
+  const start = row.querySelector(".shift-start-field").value;
+  const end = row.querySelector(".shift-end-field").value;
+
+  if (!name || !isValidTimeRange(start, end)) {
+    window.alert("Shift presets need a name and valid start/end times.");
+    return;
+  }
+
+  template.name = name;
+  template.start = start;
+  template.end = end;
+  render();
+}
+
+function removeShiftTemplate(shiftId) {
+  const template = data.shiftTemplates.find((item) => item.id === shiftId);
+  if (!template || !window.confirm(`Remove ${template.name}? Existing schedules using it will become custom schedules.`)) {
+    return;
+  }
+
+  data.shiftTemplates = data.shiftTemplates.filter((item) => item.id !== shiftId);
+  data.users.forEach((user) => {
+    user.schedules.forEach((schedule) => {
+      if (schedule.shiftType === shiftId) {
+        schedule.shiftType = "custom";
+      }
+    });
+  });
+  render();
+}
+
 function addUser(event) {
   event.preventDefault();
   const name = elements.userNameInput.value.trim();
@@ -581,7 +808,7 @@ function removeUser(userId) {
 }
 
 function applyShiftTemplate() {
-  const template = SHIFT_TEMPLATES[elements.shiftTemplateSelect.value];
+  const template = getShiftTemplate(elements.shiftTemplateSelect.value);
   if (!template || elements.shiftTemplateSelect.value === "custom") {
     return;
   }
@@ -664,12 +891,71 @@ function removeTimelineSlot(slotId) {
 }
 
 function prefillSlotFromTimeline(event) {
+  const lane = event.target.closest(".graph-lane");
+  if (lane) {
+    const rect = lane.getBoundingClientRect();
+    const ratio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
+    const rawMinutes = TIMELINE_START_MINUTES + ratio * (TIMELINE_END_MINUTES - TIMELINE_START_MINUTES);
+    const startMinutes = Math.min(roundToNearestSlot(rawMinutes), TIMELINE_END_MINUTES - SLOT_MINUTES);
+    prefillScheduleForm(lane.dataset.userId, lane.dataset.date, minutesToTime(startMinutes), minutesToTime(startMinutes + SLOT_MINUTES), true);
+    return;
+  }
+
+  const weekCell = event.target.closest(".week-cell");
+  if (weekCell) {
+    const template = getShiftTemplate(elements.shiftTemplateSelect?.value) || getShiftTemplate("regular") || data.shiftTemplates[0];
+    prefillScheduleForm(weekCell.dataset.userId, weekCell.dataset.date, template?.start || "09:00", template?.end || "17:00", false);
+    return;
+  }
+
   const rect = elements.timelineCanvas.getBoundingClientRect();
   const ratio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
   const rawMinutes = TIMELINE_START_MINUTES + ratio * (TIMELINE_END_MINUTES - TIMELINE_START_MINUTES);
   const startMinutes = Math.min(roundToNearestSlot(rawMinutes), TIMELINE_END_MINUTES - SLOT_MINUTES);
   elements.slotStartInput.value = minutesToTime(startMinutes);
   elements.slotEndInput.value = minutesToTime(startMinutes + SLOT_MINUTES);
+}
+
+function prefillScheduleForm(userId, date, start, end, forceCustom) {
+  if (elements.scheduleUserSelect) {
+    elements.scheduleUserSelect.value = userId;
+  }
+
+  if (elements.timelineUserSelect) {
+    elements.timelineUserSelect.value = userId;
+  }
+
+  if (elements.shiftTemplateSelect && forceCustom) {
+    elements.shiftTemplateSelect.value = "custom";
+  }
+
+  if (elements.scheduleStartInput) {
+    elements.scheduleStartInput.value = start;
+  }
+
+  if (elements.scheduleEndInput) {
+    elements.scheduleEndInput.value = end;
+  }
+
+  if (elements.slotStartInput) {
+    elements.slotStartInput.value = start;
+  }
+
+  if (elements.slotEndInput) {
+    elements.slotEndInput.value = end;
+  }
+
+  selectOnlyScheduleDay(getDayNameFromDate(date));
+}
+
+function selectOnlyScheduleDay(day) {
+  if (!elements.dayCheckboxes) {
+    return;
+  }
+
+  elements.dayCheckboxes.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
+    checkbox.checked = checkbox.value === day;
+  });
 }
 
 function addSystem(event) {
@@ -1002,6 +1288,15 @@ function normalizeData() {
   data.assignmentLog = Array.isArray(data.assignmentLog) ? data.assignmentLog : [];
   data.exceptions = Array.isArray(data.exceptions) ? data.exceptions : [];
   data.holidays = Array.isArray(data.holidays) ? data.holidays : [];
+  data.shiftTemplates = Array.isArray(data.shiftTemplates) && data.shiftTemplates.length > 0
+    ? data.shiftTemplates
+    : cloneData(DEFAULT_SHIFT_TEMPLATES);
+  data.shiftTemplates = data.shiftTemplates.map((template) => ({
+    id: template.id || makeId(template.name || "shift", []),
+    name: template.name || template.label || "Shift",
+    start: template.start || "09:00",
+    end: template.end || "17:00"
+  }));
   data.queues = data.queues && typeof data.queues === "object" ? data.queues : {};
 
   data.users.forEach((user) => {
@@ -1045,8 +1340,8 @@ function setDefaultDates() {
   }
 }
 
-function timelineBlock(start, end, className, label) {
-  return `<div class="timeline-block ${className}" style="${timeRangeStyle(start, end)}">${escapeHtml(label)} · ${start}–${end}</div>`;
+function graphBlock(start, end, className, label) {
+  return `<span class="graph-block ${className}" style="${timeRangeStyle(start, end)}">${escapeHtml(label)} · ${start}–${end}</span>`;
 }
 
 function timeRangeStyle(start, end) {
@@ -1081,10 +1376,35 @@ function getEasternNow() {
   };
 }
 
-function getDayNameFromDate(date) {
+function getWeekDates(date) {
+  const base = parseDate(date);
+  const day = base.getUTCDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const monday = addDays(base, mondayOffset);
+
+  return Array.from({ length: 7 }, (_, index) => formatDate(addDays(monday, index)));
+}
+
+function parseDate(date) {
   const [year, month, day] = date.split("-").map(Number);
-  const utcDate = new Date(Date.UTC(year, month - 1, day, 12));
-  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(utcDate);
+  return new Date(Date.UTC(year, month - 1, day, 12));
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function formatDate(date) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getDayNameFromDate(date) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(parseDate(date));
 }
 
 function isWithinWindow(currentMinutes, startMinutes, endMinutes) {
@@ -1138,12 +1458,15 @@ function rotate(items, startIndex) {
 }
 
 function getShiftLabel(shiftType) {
-  return SHIFT_TEMPLATES[shiftType]?.label || "Custom time";
+  return getShiftTemplate(shiftType)?.name || "Custom time";
 }
 
 function inferShiftType(start, end) {
-  const match = Object.entries(SHIFT_TEMPLATES).find(([key, template]) => key !== "custom" && template.start === start && template.end === end);
-  return match?.[0] || "custom";
+  return data.shiftTemplates.find((template) => template.start === start && template.end === end)?.id || "custom";
+}
+
+function getShiftTemplate(shiftType) {
+  return data.shiftTemplates.find((template) => template.id === shiftType);
 }
 
 function makeId(name, existingIds) {
@@ -1181,6 +1504,14 @@ function cloneData(value) {
 
 function emptyState(message) {
   return `<div class="empty-state">${escapeHtml(message)}</div>`;
+}
+
+function cssEscape(value) {
+  if (globalThis.CSS?.escape) {
+    return globalThis.CSS.escape(value);
+  }
+
+  return String(value).replaceAll('"', '\\"').replaceAll("\\", "\\\\");
 }
 
 function escapeHtml(value) {
