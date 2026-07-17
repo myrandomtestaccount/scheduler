@@ -1,6 +1,17 @@
 const STORAGE_KEY = "smeScheduler.data.v1";
 const EASTERN_TIME_ZONE = "America/New_York";
+const GLOBAL_HOLIDAY_USER_ID = "__all__";
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const TIMELINE_START_MINUTES = 6 * 60;
+const TIMELINE_END_MINUTES = 22 * 60;
+const SLOT_MINUTES = 30;
+
+const SHIFT_TEMPLATES = {
+  early: { label: "Early shift", start: "07:00", end: "15:00" },
+  regular: { label: "Regular shift", start: "09:00", end: "17:00" },
+  late: { label: "Late shift", start: "11:00", end: "19:00" },
+  custom: { label: "Custom time", start: "09:00", end: "17:00" }
+};
 
 const defaultData = {
   users: [
@@ -8,42 +19,49 @@ const defaultData = {
       id: "alice",
       name: "Alice",
       schedules: [
-        { id: "alice-weekdays", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "08:00", end: "16:00", priority: 1 }
+        { id: "alice-regular", shiftType: "regular", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "09:00", end: "17:00", priority: 1 }
       ]
     },
     {
       id: "ben",
       name: "Ben",
       schedules: [
-        { id: "ben-weekdays", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "09:00", end: "17:00", priority: 2 }
+        { id: "ben-early", shiftType: "early", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "07:00", end: "15:00", priority: 2 }
       ]
     },
     {
       id: "casey",
       name: "Casey",
       schedules: [
-        { id: "casey-weekdays", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "10:00", end: "18:00", priority: 3 }
+        { id: "casey-late", shiftType: "late", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "11:00", end: "19:00", priority: 3 }
       ]
     }
   ],
   systems: [
-    { id: "external-system", name: "External System", primaryUserIds: ["alice", "ben"] },
+    { id: "external-system", name: "External System", primaryUserIds: ["alice", "ben", "casey"] },
     { id: "internal-api", name: "Internal API", primaryUserIds: ["casey", "alice"] }
   ],
   queues: {
     "external-system": 0,
     "internal-api": 0
   },
+  exceptions: [],
+  holidays: [],
   assignmentLog: []
 };
 
 let data = loadData();
+let selectedAssigneeId = null;
 
 const elements = {
   currentEtTime: document.querySelector("#currentEtTime"),
+  adminToggleButton: document.querySelector("#adminToggleButton"),
+  adminPanel: document.querySelector("#adminPanel"),
+  closeAdminButton: document.querySelector("#closeAdminButton"),
   assignmentSystemSelect: document.querySelector("#assignmentSystemSelect"),
   suggestionCard: document.querySelector("#suggestionCard"),
   markAssignedButton: document.querySelector("#markAssignedButton"),
+  selectedAssigneeText: document.querySelector("#selectedAssigneeText"),
   queueList: document.querySelector("#queueList"),
   assignmentLog: document.querySelector("#assignmentLog"),
   refreshButton: document.querySelector("#refreshButton"),
@@ -52,14 +70,29 @@ const elements = {
   usersList: document.querySelector("#usersList"),
   addScheduleForm: document.querySelector("#addScheduleForm"),
   scheduleUserSelect: document.querySelector("#scheduleUserSelect"),
+  shiftTemplateSelect: document.querySelector("#shiftTemplateSelect"),
   dayCheckboxes: document.querySelector("#dayCheckboxes"),
   scheduleStartInput: document.querySelector("#scheduleStartInput"),
   scheduleEndInput: document.querySelector("#scheduleEndInput"),
   schedulePriorityInput: document.querySelector("#schedulePriorityInput"),
   scheduleList: document.querySelector("#scheduleList"),
+  timelineUserSelect: document.querySelector("#timelineUserSelect"),
+  timelineDateInput: document.querySelector("#timelineDateInput"),
+  timelineCanvas: document.querySelector("#timelineCanvas"),
+  addSlotForm: document.querySelector("#addSlotForm"),
+  slotTypeSelect: document.querySelector("#slotTypeSelect"),
+  slotStartInput: document.querySelector("#slotStartInput"),
+  slotEndInput: document.querySelector("#slotEndInput"),
+  slotReasonInput: document.querySelector("#slotReasonInput"),
+  slotsList: document.querySelector("#slotsList"),
   addSystemForm: document.querySelector("#addSystemForm"),
   systemNameInput: document.querySelector("#systemNameInput"),
   systemsList: document.querySelector("#systemsList"),
+  addHolidayForm: document.querySelector("#addHolidayForm"),
+  holidayUserSelect: document.querySelector("#holidayUserSelect"),
+  holidayDateInput: document.querySelector("#holidayDateInput"),
+  holidayNameInput: document.querySelector("#holidayNameInput"),
+  holidaysList: document.querySelector("#holidaysList"),
   exportButton: document.querySelector("#exportButton"),
   importInput: document.querySelector("#importInput"),
   resetButton: document.querySelector("#resetButton"),
@@ -78,12 +111,25 @@ function bindEvents() {
     button.addEventListener("click", () => activateTab(button.dataset.tab));
   });
 
+  elements.adminToggleButton.addEventListener("click", () => elements.adminPanel.classList.remove("hidden"));
+  elements.closeAdminButton.addEventListener("click", () => elements.adminPanel.classList.add("hidden"));
   elements.refreshButton.addEventListener("click", render);
-  elements.assignmentSystemSelect.addEventListener("change", renderClockAndAssignment);
-  elements.markAssignedButton.addEventListener("click", markSuggestedAssigned);
+  elements.assignmentSystemSelect.addEventListener("change", () => {
+    selectedAssigneeId = null;
+    renderClockAndAssignment();
+  });
+  elements.markAssignedButton.addEventListener("click", markSelectedAssigned);
   elements.addUserForm.addEventListener("submit", addUser);
   elements.addScheduleForm.addEventListener("submit", addSchedule);
+  elements.shiftTemplateSelect.addEventListener("change", applyShiftTemplate);
+  elements.scheduleStartInput.addEventListener("input", () => elements.shiftTemplateSelect.value = "custom");
+  elements.scheduleEndInput.addEventListener("input", () => elements.shiftTemplateSelect.value = "custom");
+  elements.timelineUserSelect.addEventListener("change", renderTimelineTools);
+  elements.timelineDateInput.addEventListener("change", renderTimelineTools);
+  elements.timelineCanvas.addEventListener("click", prefillSlotFromTimeline);
+  elements.addSlotForm.addEventListener("submit", addTimelineSlot);
   elements.addSystemForm.addEventListener("submit", addSystem);
+  elements.addHolidayForm.addEventListener("submit", addHoliday);
   elements.exportButton.addEventListener("click", exportData);
   elements.importInput.addEventListener("change", importData);
   elements.resetButton.addEventListener("click", resetData);
@@ -101,25 +147,30 @@ function activateTab(tabName) {
 
 function render() {
   normalizeData();
+  setDefaultDates();
   saveData();
   renderSystemSelect();
-  renderScheduleUserSelect();
+  renderUserSelectors();
   renderUsers();
   renderSchedules();
   renderSystems();
+  renderHolidays();
+  renderTimelineTools();
   renderDataPreview();
   renderClockAndAssignment();
 }
 
 function renderClockAndAssignment() {
   const easternNow = getEasternNow();
-  elements.currentEtTime.textContent = `${easternNow.day} ${easternNow.time}`;
+  elements.currentEtTime.textContent = `${easternNow.day} ${easternNow.date} · ${easternNow.time}`;
 
-  const selectedSystemId = elements.assignmentSystemSelect.value;
-  const suggestion = getSuggestion(selectedSystemId, easternNow);
+  const queueState = getQueueState(elements.assignmentSystemSelect.value, easternNow);
+  if (!queueState.rows.some((row) => row.user.id === selectedAssigneeId && row.selectable)) {
+    selectedAssigneeId = queueState.recommendedRow?.user.id ?? null;
+  }
 
-  renderSuggestion(suggestion);
-  renderQueue(suggestion);
+  renderSuggestion(queueState);
+  renderQueue(queueState);
   renderAssignmentLog();
 }
 
@@ -139,56 +190,96 @@ function renderSystemSelect() {
   }
 }
 
-function renderSuggestion(suggestion) {
-  if (!suggestion.system) {
-    elements.suggestionCard.innerHTML = `<span class="suggestion-name">No system selected</span><span class="suggestion-meta">Add a system/app first.</span>`;
+function renderUserSelectors() {
+  fillUserSelect(elements.scheduleUserSelect);
+  fillUserSelect(elements.timelineUserSelect);
+  fillUserSelect(elements.holidayUserSelect, true);
+}
+
+function fillUserSelect(select, includeAllUsers = false) {
+  const selectedValue = select.value;
+  select.innerHTML = "";
+
+  if (includeAllUsers) {
+    const allOption = document.createElement("option");
+    allOption.value = GLOBAL_HOLIDAY_USER_ID;
+    allOption.textContent = "All users";
+    select.append(allOption);
+  }
+
+  data.users.forEach((user) => {
+    const option = document.createElement("option");
+    option.value = user.id;
+    option.textContent = user.name;
+    select.append(option);
+  });
+
+  if ([...select.options].some((option) => option.value === selectedValue)) {
+    select.value = selectedValue;
+  }
+}
+
+function renderSuggestion(queueState) {
+  if (!queueState.system) {
+    elements.suggestionCard.innerHTML = `<span class="suggestion-name">No system selected</span><span class="suggestion-meta">Add a system/app from Admin tools.</span>`;
     elements.markAssignedButton.disabled = true;
+    elements.selectedAssigneeText.textContent = "Select a user from the queue.";
     return;
   }
 
-  if (!suggestion.user) {
-    elements.suggestionCard.innerHTML = `<span class="suggestion-name">No available user</span><span class="suggestion-meta">${escapeHtml(suggestion.message)}</span>`;
+  const selectedRow = queueState.rows.find((row) => row.user.id === selectedAssigneeId);
+  if (!selectedRow) {
+    elements.suggestionCard.innerHTML = `<span class="suggestion-name">No selectable SME</span><span class="suggestion-meta">No one in this queue is available now or later today.</span>`;
     elements.markAssignedButton.disabled = true;
+    elements.selectedAssigneeText.textContent = "No selectable user.";
     return;
   }
 
   elements.suggestionCard.innerHTML = `
-    <span class="suggestion-name">${escapeHtml(suggestion.user.name)}</span>
-    <span class="suggestion-meta">${escapeHtml(suggestion.message)}</span>
+    <span class="suggestion-name">${escapeHtml(selectedRow.user.name)}</span>
+    <span class="suggestion-meta">${escapeHtml(selectedRow.message)}</span>
   `;
-  elements.markAssignedButton.disabled = false;
+  elements.markAssignedButton.disabled = !selectedRow.selectable;
+  elements.selectedAssigneeText.textContent = selectedRow.selectable
+    ? `Selected: ${selectedRow.user.name}`
+    : `${selectedRow.user.name} cannot be selected for today.`;
 }
 
-function renderQueue(suggestion) {
-  const rows = suggestion.queue.map((row, index) => {
-    const statusClass = row.available ? "available" : "unavailable";
-    const position = index === 0 ? "Next" : `#${index + 1}`;
+function renderQueue(queueState) {
+  const rows = queueState.rows.map((row, index) => {
+    const selectedClass = row.user.id === selectedAssigneeId ? " selected" : "";
+    const disabled = row.selectable ? "" : "disabled";
     return `
-      <div class="list-item">
-        <div>
-          <div class="item-title">${position}: ${escapeHtml(row.user.name)}</div>
-          <div class="meta">${escapeHtml(row.scheduleText)}</div>
-        </div>
-        <span class="status-pill ${statusClass}">${row.available ? "Available" : "Unavailable"}</span>
-      </div>
+      <button class="queue-card ${row.status}${selectedClass}" type="button" data-user-id="${escapeHtml(row.user.id)}" ${disabled}>
+        <span class="queue-card-header">
+          <span class="queue-position">${index === 0 ? "Next in queue" : `Queue #${index + 1}`}</span>
+          <span class="status-pill ${row.status}">${escapeHtml(row.badge)}</span>
+        </span>
+        <span class="queue-name">${escapeHtml(row.user.name)}</span>
+        <span class="meta">${escapeHtml(row.message)}</span>
+      </button>
     `;
   }).join("");
 
-  elements.queueList.innerHTML = rows || emptyState("No primary users assigned to this system.");
+  elements.queueList.innerHTML = rows || emptyState("No SMEs are assigned to this system/app yet.");
+  elements.queueList.querySelectorAll(".queue-card").forEach((button) => {
+    button.addEventListener("click", () => {
+      selectedAssigneeId = button.dataset.userId;
+      renderClockAndAssignment();
+    });
+  });
 }
 
 function renderAssignmentLog() {
   const rows = data.assignmentLog.slice(-8).reverse().map((entry) => {
-    const system = data.systems.find((item) => item.id === entry.systemId);
-    const userName = entry.userName || data.users.find((user) => user.id === entry.userId)?.name || "Removed user";
     const assignedAt = new Date(entry.assignedAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
     return `
       <div class="list-item">
         <div>
-          <div class="item-title">${escapeHtml(userName)}</div>
-          <div class="meta">${escapeHtml(system?.name || "Removed system")} · ${assignedAt}</div>
+          <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
+          <div class="meta">${escapeHtml(entry.systemName || "Removed system")} · ${assignedAt}</div>
         </div>
-        <span class="status-pill ${entry.wasFallback ? "unavailable" : "available"}">${entry.wasFallback ? "Fallback" : "Primary"}</span>
+        <span class="status-pill ${entry.status || "available"}">${escapeHtml(entry.statusLabel || "Assigned")}</span>
       </div>
     `;
   }).join("");
@@ -200,11 +291,12 @@ function renderUsers() {
   const rows = data.users.map((user) => {
     const scheduleCount = user.schedules.length;
     const coverageCount = data.systems.filter((system) => system.primaryUserIds.includes(user.id)).length;
+    const holidayCount = data.holidays.filter((holiday) => holiday.userId === user.id).length;
     return `
       <div class="list-item">
         <div>
           <div class="item-title">${escapeHtml(user.name)}</div>
-          <div class="meta">${scheduleCount} schedule block${scheduleCount === 1 ? "" : "s"} · ${coverageCount} system/app assignment${coverageCount === 1 ? "" : "s"}</div>
+          <div class="meta">${scheduleCount} schedule block${scheduleCount === 1 ? "" : "s"} · ${coverageCount} system/app${coverageCount === 1 ? "" : "s"} · ${holidayCount} holiday${holidayCount === 1 ? "" : "s"}</div>
         </div>
         <div class="item-actions">
           <button class="remove-button" type="button" data-action="remove-user" data-user-id="${escapeHtml(user.id)}">Remove</button>
@@ -217,22 +309,6 @@ function renderUsers() {
   elements.usersList.querySelectorAll("[data-action='remove-user']").forEach((button) => {
     button.addEventListener("click", () => removeUser(button.dataset.userId));
   });
-}
-
-function renderScheduleUserSelect() {
-  const selectedValue = elements.scheduleUserSelect.value;
-  elements.scheduleUserSelect.innerHTML = "";
-
-  data.users.forEach((user) => {
-    const option = document.createElement("option");
-    option.value = user.id;
-    option.textContent = user.name;
-    elements.scheduleUserSelect.append(option);
-  });
-
-  if (data.users.some((user) => user.id === selectedValue)) {
-    elements.scheduleUserSelect.value = selectedValue;
-  }
 }
 
 function renderDayCheckboxes() {
@@ -250,7 +326,7 @@ function renderSchedules() {
       return `
         <div class="list-item">
           <div>
-            <div class="item-title">${escapeHtml(user.name)}</div>
+            <div class="item-title">${escapeHtml(user.name)} · ${escapeHtml(getShiftLabel(schedule.shiftType))}</div>
             <div class="meta">${escapeHtml(schedule.days.join(", "))} · ${schedule.start}–${schedule.end} ET · Priority ${schedule.priority}</div>
           </div>
           <button class="remove-button" type="button" data-action="remove-schedule" data-user-id="${escapeHtml(user.id)}" data-schedule-id="${escapeHtml(schedule.id)}">Remove</button>
@@ -262,6 +338,61 @@ function renderSchedules() {
   elements.scheduleList.innerHTML = rows || emptyState("Add a schedule block.");
   elements.scheduleList.querySelectorAll("[data-action='remove-schedule']").forEach((button) => {
     button.addEventListener("click", () => removeSchedule(button.dataset.userId, button.dataset.scheduleId));
+  });
+}
+
+function renderTimelineTools() {
+  renderTimeline();
+  renderSlots();
+}
+
+function renderTimeline() {
+  const user = data.users.find((item) => item.id === elements.timelineUserSelect.value);
+  const date = elements.timelineDateInput.value || getEasternNow().date;
+  if (!user) {
+    elements.timelineCanvas.innerHTML = "";
+    return;
+  }
+
+  const day = getDayNameFromDate(date);
+  const blocks = [];
+  const holidays = getHolidaysForUser(user.id, date);
+
+  getScheduleWindowsForDate(user, date, day)
+    .filter((window) => window.source === "schedule")
+    .forEach((window) => blocks.push(timelineBlock(window.start, window.end, "schedule", "Schedule")));
+
+  data.exceptions
+    .filter((slot) => slot.userId === user.id && slot.date === date)
+    .forEach((slot) => blocks.push(timelineBlock(slot.start, slot.end, slot.type, slot.type === "break" ? "Break" : "Extra")));
+
+  if (holidays.length > 0) {
+    blocks.push(`<div class="timeline-block holiday">Holiday: ${escapeHtml(holidays.map((holiday) => holiday.name || "Holiday").join(", "))}</div>`);
+  }
+
+  elements.timelineCanvas.innerHTML = blocks.join("");
+}
+
+function renderSlots() {
+  const rows = data.exceptions
+    .slice()
+    .sort((left, right) => `${left.date} ${left.start}`.localeCompare(`${right.date} ${right.start}`))
+    .map((slot) => {
+      const user = data.users.find((item) => item.id === slot.userId);
+      return `
+        <div class="list-item">
+          <div>
+            <div class="item-title">${escapeHtml(user?.name || "Removed user")} · ${slot.type === "break" ? "Break" : "Extra coverage"}</div>
+            <div class="meta">${slot.date} · ${slot.start}–${slot.end} ET${slot.reason ? ` · ${escapeHtml(slot.reason)}` : ""}</div>
+          </div>
+          <button class="remove-button" type="button" data-action="remove-slot" data-slot-id="${escapeHtml(slot.id)}">Remove</button>
+        </div>
+      `;
+    }).join("");
+
+  elements.slotsList.innerHTML = rows || emptyState("No breaks or extra slots.");
+  elements.slotsList.querySelectorAll("[data-action='remove-slot']").forEach((button) => {
+    button.addEventListener("click", () => removeTimelineSlot(button.dataset.slotId));
   });
 }
 
@@ -320,6 +451,31 @@ function renderSystems() {
   });
 }
 
+function renderHolidays() {
+  const rows = data.holidays
+    .slice()
+    .sort((left, right) => left.date.localeCompare(right.date))
+    .map((holiday) => {
+      const userName = holiday.userId === GLOBAL_HOLIDAY_USER_ID
+        ? "All users"
+        : data.users.find((user) => user.id === holiday.userId)?.name || "Removed user";
+      return `
+        <div class="list-item">
+          <div>
+            <div class="item-title">${escapeHtml(userName)}</div>
+            <div class="meta">${holiday.date} · ${escapeHtml(holiday.name || "Holiday")}</div>
+          </div>
+          <button class="remove-button" type="button" data-action="remove-holiday" data-holiday-id="${escapeHtml(holiday.id)}">Remove</button>
+        </div>
+      `;
+    }).join("");
+
+  elements.holidaysList.innerHTML = rows || emptyState("No holidays yet.");
+  elements.holidaysList.querySelectorAll("[data-action='remove-holiday']").forEach((button) => {
+    button.addEventListener("click", () => removeHoliday(button.dataset.holidayId));
+  });
+}
+
 function renderDataPreview() {
   elements.dataPreview.value = JSON.stringify(data, null, 2);
 }
@@ -343,16 +499,29 @@ function addUser(event) {
 
 function removeUser(userId) {
   const user = data.users.find((item) => item.id === userId);
-  if (!user || !window.confirm(`Remove ${user.name}? This also removes them from system coverage.`)) {
+  if (!user || !window.confirm(`Remove ${user.name}? This also removes their schedules, breaks, holidays, and coverage.`)) {
     return;
   }
 
   data.users = data.users.filter((item) => item.id !== userId);
+  data.exceptions = data.exceptions.filter((slot) => slot.userId !== userId);
+  data.holidays = data.holidays.filter((holiday) => holiday.userId !== userId);
   data.systems.forEach((system) => {
     system.primaryUserIds = system.primaryUserIds.filter((id) => id !== userId);
     clampQueue(system.id);
   });
+  selectedAssigneeId = null;
   render();
+}
+
+function applyShiftTemplate() {
+  const template = SHIFT_TEMPLATES[elements.shiftTemplateSelect.value];
+  if (!template || elements.shiftTemplateSelect.value === "custom") {
+    return;
+  }
+
+  elements.scheduleStartInput.value = template.start;
+  elements.scheduleEndInput.value = template.end;
 }
 
 function addSchedule(event) {
@@ -369,8 +538,14 @@ function addSchedule(event) {
     return;
   }
 
+  if (!isValidTimeRange(elements.scheduleStartInput.value, elements.scheduleEndInput.value)) {
+    window.alert("Schedule start and end cannot be the same.");
+    return;
+  }
+
   user.schedules.push({
     id: makeRecordId("schedule"),
+    shiftType: elements.shiftTemplateSelect.value,
     days,
     start: elements.scheduleStartInput.value,
     end: elements.scheduleEndInput.value,
@@ -388,6 +563,47 @@ function removeSchedule(userId, scheduleId) {
 
   user.schedules = user.schedules.filter((schedule) => schedule.id !== scheduleId);
   render();
+}
+
+function addTimelineSlot(event) {
+  event.preventDefault();
+  const user = data.users.find((item) => item.id === elements.timelineUserSelect.value);
+  if (!user) {
+    window.alert("Add a user before adding a timeline slot.");
+    return;
+  }
+
+  if (!isValidTimeRange(elements.slotStartInput.value, elements.slotEndInput.value)) {
+    window.alert("Slot start and end cannot be the same.");
+    return;
+  }
+
+  data.exceptions.push({
+    id: makeRecordId("slot"),
+    userId: user.id,
+    date: elements.timelineDateInput.value || getEasternNow().date,
+    type: elements.slotTypeSelect.value,
+    start: elements.slotStartInput.value,
+    end: elements.slotEndInput.value,
+    reason: elements.slotReasonInput.value.trim()
+  });
+
+  elements.slotReasonInput.value = "";
+  render();
+}
+
+function removeTimelineSlot(slotId) {
+  data.exceptions = data.exceptions.filter((slot) => slot.id !== slotId);
+  render();
+}
+
+function prefillSlotFromTimeline(event) {
+  const rect = elements.timelineCanvas.getBoundingClientRect();
+  const ratio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
+  const rawMinutes = TIMELINE_START_MINUTES + ratio * (TIMELINE_END_MINUTES - TIMELINE_START_MINUTES);
+  const startMinutes = Math.min(roundToNearestSlot(rawMinutes), TIMELINE_END_MINUTES - SLOT_MINUTES);
+  elements.slotStartInput.value = minutesToTime(startMinutes);
+  elements.slotEndInput.value = minutesToTime(startMinutes + SLOT_MINUTES);
 }
 
 function addSystem(event) {
@@ -412,6 +628,7 @@ function removeSystem(systemId) {
 
   data.systems = data.systems.filter((item) => item.id !== systemId);
   delete data.queues[systemId];
+  selectedAssigneeId = null;
   render();
 }
 
@@ -430,6 +647,7 @@ function toggleCoverage(systemId, userId, checked) {
   }
 
   clampQueue(systemId);
+  selectedAssigneeId = null;
   render();
 }
 
@@ -447,168 +665,191 @@ function moveCoveredUser(systemId, userId, direction) {
 
   [system.primaryUserIds[currentIndex], system.primaryUserIds[nextIndex]] = [system.primaryUserIds[nextIndex], system.primaryUserIds[currentIndex]];
   clampQueue(systemId);
+  selectedAssigneeId = null;
   render();
 }
 
-function markSuggestedAssigned() {
-  const suggestion = getSuggestion(elements.assignmentSystemSelect.value, getEasternNow());
-  if (!suggestion.user || !suggestion.system) {
+function addHoliday(event) {
+  event.preventDefault();
+  if (!elements.holidayDateInput.value) {
+    window.alert("Choose a holiday date.");
+    return;
+  }
+
+  data.holidays.push({
+    id: makeRecordId("holiday"),
+    userId: elements.holidayUserSelect.value,
+    date: elements.holidayDateInput.value,
+    name: elements.holidayNameInput.value.trim() || "Holiday"
+  });
+
+  elements.holidayNameInput.value = "";
+  render();
+}
+
+function removeHoliday(holidayId) {
+  data.holidays = data.holidays.filter((holiday) => holiday.id !== holidayId);
+  render();
+}
+
+function markSelectedAssigned() {
+  const easternNow = getEasternNow();
+  const queueState = getQueueState(elements.assignmentSystemSelect.value, easternNow);
+  const selectedRow = queueState.rows.find((row) => row.user.id === selectedAssigneeId);
+  if (!queueState.system || !selectedRow || !selectedRow.selectable) {
     return;
   }
 
   data.assignmentLog.push({
     id: makeRecordId("assignment"),
     assignedAt: new Date().toISOString(),
-    systemId: suggestion.system.id,
-    systemName: suggestion.system.name,
-    userId: suggestion.user.id,
-    userName: suggestion.user.name,
-    wasFallback: suggestion.wasFallback
+    easternDate: easternNow.date,
+    systemId: queueState.system.id,
+    systemName: queueState.system.name,
+    userId: selectedRow.user.id,
+    userName: selectedRow.user.name,
+    status: selectedRow.status,
+    statusLabel: selectedRow.badge
   });
 
-  if (!suggestion.wasFallback) {
-    data.queues[suggestion.system.id] = (getQueueIndex(suggestion.system) + 1) % suggestion.system.primaryUserIds.length;
+  const originalIndex = queueState.system.primaryUserIds.indexOf(selectedRow.user.id);
+  if (originalIndex >= 0) {
+    data.queues[queueState.system.id] = (originalIndex + 1) % queueState.system.primaryUserIds.length;
   }
 
+  selectedAssigneeId = null;
   render();
 }
 
-function getSuggestion(systemId, easternNow) {
+function getQueueState(systemId, easternNow) {
   const system = data.systems.find((item) => item.id === systemId);
   if (!system) {
-    return { system: null, user: null, queue: [], wasFallback: false, message: "Add a system/app first." };
+    return { system: null, rows: [], recommendedRow: null };
   }
 
   const primaryUsers = system.primaryUserIds
     .map((userId) => data.users.find((user) => user.id === userId))
     .filter(Boolean);
-  const queue = rotate(primaryUsers, getQueueIndex(system)).map((user) => {
-    const availability = getAvailability(user, easternNow);
-    return {
-      user,
-      available: availability.available,
-      priority: availability.priority,
-      scheduleText: availability.text
-    };
+
+  const rows = rotate(primaryUsers, getQueueIndex(system)).map((user) => {
+    const status = getUserStatus(user, easternNow);
+    return { user, ...status };
   });
 
-  const nextPrimary = queue[0];
-  if (nextPrimary?.available) {
+  const recommendedRow =
+    rows.find((row) => row.status === "available") ||
+    rows.find((row) => row.status === "later") ||
+    null;
+
+  return { system, rows, recommendedRow };
+}
+
+function getUserStatus(user, easternNow) {
+  const holidayMatches = getHolidaysForUser(user.id, easternNow.date);
+  if (holidayMatches.length > 0) {
     return {
-      system,
-      user: nextPrimary.user,
-      queue,
-      wasFallback: false,
-      message: "Next primary SME is currently available."
+      status: "holiday",
+      badge: "Holiday",
+      selectable: false,
+      message: `Holiday today: ${holidayMatches.map((holiday) => holiday.name || "Holiday").join(", ")}.`
     };
   }
 
-  const primaryIds = new Set(system.primaryUserIds);
-  const fallback = data.users
-    .filter((user) => !primaryIds.has(user.id))
-    .map((user) => ({ user, availability: getAvailability(user, easternNow) }))
-    .filter((item) => item.availability.available)
-    .sort((left, right) => {
-      return left.availability.priority - right.availability.priority ||
-        left.availability.startMinutes - right.availability.startMinutes ||
-        left.user.name.localeCompare(right.user.name);
-    })[0];
+  const windows = getScheduleWindowsForDate(user, easternNow.date, easternNow.day);
+  const breaks = data.exceptions
+    .filter((slot) => slot.userId === user.id && slot.date === easternNow.date && slot.type === "break")
+    .map((slot) => ({ ...slot, startMinutes: toMinutes(slot.start), endMinutes: toMinutes(slot.end) }))
+    .sort((left, right) => left.startMinutes - right.startMinutes);
 
-  if (fallback) {
+  const currentBreak = breaks.find((slot) => isWithinWindow(easternNow.minutes, slot.startMinutes, slot.endMinutes));
+  if (currentBreak) {
+    const nextStart = findNextAvailableStart(easternNow.minutes, windows, breaks);
+    if (nextStart !== null) {
+      return {
+        status: "later",
+        badge: "On break",
+        selectable: true,
+        message: `Currently on break${currentBreak.reason ? ` (${currentBreak.reason})` : ""}. Back at ${minutesToTime(nextStart)} ET; you can pick them anyway.`
+      };
+    }
+  }
+
+  const currentWindow = windows.find((window) => isWithinWindow(easternNow.minutes, toMinutes(window.start), toMinutes(window.end)));
+  if (currentWindow && !currentBreak) {
     return {
-      system,
-      user: fallback.user,
-      queue,
-      wasFallback: true,
-      message: `${nextPrimary?.user.name || "The next primary SME"} is unavailable. Suggested fallback is available now.`
+      status: "available",
+      badge: currentWindow.source === "extra" ? "Extra slot" : "Available",
+      selectable: true,
+      message: currentWindow.source === "extra"
+        ? `Available now via extra coverage slot until ${currentWindow.end} ET.`
+        : `Available now until ${currentWindow.end} ET.`
+    };
+  }
+
+  const nextStart = findNextAvailableStart(easternNow.minutes, windows, breaks);
+  if (nextStart !== null) {
+    return {
+      status: "later",
+      badge: "Later today",
+      selectable: true,
+      message: `Not online yet. Scheduled to log in at ${minutesToTime(nextStart)} ET; you can pick them anyway.`
+    };
+  }
+
+  if (windows.length > 0) {
+    const latestEnd = Math.max(...windows.map((window) => toMinutes(window.end)));
+    return {
+      status: "unavailable",
+      badge: "Done today",
+      selectable: false,
+      message: `No remaining availability today. Last scheduled end was ${minutesToTime(latestEnd)} ET.`
     };
   }
 
   return {
-    system,
-    user: null,
-    queue,
-    wasFallback: false,
-    message: nextPrimary ? `${nextPrimary.user.name} is unavailable and no fallback user is scheduled now.` : "No primary SMEs assigned to this system."
+    status: "unavailable",
+    badge: "Not scheduled",
+    selectable: false,
+    message: "Not scheduled today."
   };
 }
 
-function getAvailability(user, easternNow) {
-  const matchingSchedules = user.schedules
-    .filter((schedule) => schedule.days.includes(easternNow.day))
-    .filter((schedule) => isWithinWindow(easternNow.minutes, toMinutes(schedule.start), toMinutes(schedule.end)))
-    .sort((left, right) => Number(left.priority) - Number(right.priority) || toMinutes(left.start) - toMinutes(right.start));
+function getScheduleWindowsForDate(user, date, day) {
+  const scheduleWindows = user.schedules
+    .filter((schedule) => schedule.days.includes(day))
+    .map((schedule) => ({ source: "schedule", start: schedule.start, end: schedule.end }));
 
-  if (matchingSchedules.length === 0) {
-    return {
-      available: false,
-      priority: Number.MAX_SAFE_INTEGER,
-      startMinutes: Number.MAX_SAFE_INTEGER,
-      text: "Not scheduled now"
-    };
+  const extraWindows = data.exceptions
+    .filter((slot) => slot.userId === user.id && slot.date === date && slot.type === "extra")
+    .map((slot) => ({ source: "extra", start: slot.start, end: slot.end }));
+
+  return scheduleWindows
+    .concat(extraWindows)
+    .filter((window) => isValidTimeRange(window.start, window.end))
+    .sort((left, right) => toMinutes(left.start) - toMinutes(right.start));
+}
+
+function findNextAvailableStart(currentMinutes, windows, breaks) {
+  for (const window of windows) {
+    const windowStart = toMinutes(window.start);
+    const windowEnd = toMinutes(window.end);
+    let candidate = Math.max(currentMinutes, windowStart);
+
+    while (candidate < windowEnd) {
+      const blockingBreak = breaks.find((slot) => isWithinWindow(candidate, slot.startMinutes, slot.endMinutes));
+      if (!blockingBreak) {
+        return candidate > currentMinutes ? candidate : null;
+      }
+
+      candidate = blockingBreak.endMinutes;
+    }
   }
 
-  const schedule = matchingSchedules[0];
-  return {
-    available: true,
-    priority: Number(schedule.priority),
-    startMinutes: toMinutes(schedule.start),
-    text: `${schedule.start}–${schedule.end} ET · Priority ${schedule.priority}`
-  };
+  return null;
 }
 
-function getEasternNow() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: EASTERN_TIME_ZONE,
-    weekday: "long",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(new Date());
-
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const time = `${values.hour}:${values.minute}`;
-
-  return {
-    day: values.weekday,
-    time,
-    minutes: toMinutes(time)
-  };
-}
-
-function isWithinWindow(currentMinutes, startMinutes, endMinutes) {
-  if (startMinutes <= endMinutes) {
-    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
-  }
-
-  return currentMinutes >= startMinutes || currentMinutes < endMinutes;
-}
-
-function toMinutes(time) {
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
-}
-
-function getQueueIndex(system) {
-  return Math.min(Math.max(Number(data.queues[system.id] || 0), 0), Math.max(system.primaryUserIds.length - 1, 0));
-}
-
-function clampQueue(systemId) {
-  const system = data.systems.find((item) => item.id === systemId);
-  if (!system || system.primaryUserIds.length === 0) {
-    data.queues[systemId] = 0;
-    return;
-  }
-
-  data.queues[systemId] = getQueueIndex(system);
-}
-
-function rotate(items, startIndex) {
-  if (items.length === 0) {
-    return [];
-  }
-
-  return items.slice(startIndex).concat(items.slice(0, startIndex));
+function getHolidaysForUser(userId, date) {
+  return data.holidays.filter((holiday) => holiday.date === date && (holiday.userId === userId || holiday.userId === GLOBAL_HOLIDAY_USER_ID));
 }
 
 function exportData() {
@@ -633,6 +874,7 @@ function importData(event) {
       const imported = JSON.parse(String(reader.result));
       validateData(imported);
       data = imported;
+      selectedAssigneeId = null;
       render();
     } catch (error) {
       window.alert(`Could not import JSON: ${error.message}`);
@@ -649,6 +891,7 @@ function resetData() {
   }
 
   data = cloneData(defaultData);
+  selectedAssigneeId = null;
   render();
 }
 
@@ -691,10 +934,31 @@ function validateData(candidate) {
 
 function normalizeData() {
   data.assignmentLog = Array.isArray(data.assignmentLog) ? data.assignmentLog : [];
+  data.exceptions = Array.isArray(data.exceptions) ? data.exceptions : [];
+  data.holidays = Array.isArray(data.holidays) ? data.holidays : [];
   data.queues = data.queues && typeof data.queues === "object" ? data.queues : {};
+
   data.users.forEach((user) => {
     user.schedules = Array.isArray(user.schedules) ? user.schedules : [];
+    user.schedules.forEach((schedule) => {
+      schedule.id ||= makeRecordId("schedule");
+      schedule.shiftType ||= inferShiftType(schedule.start, schedule.end);
+      schedule.priority = Number(schedule.priority || 1);
+    });
   });
+
+  data.exceptions.forEach((slot) => {
+    slot.id ||= makeRecordId("slot");
+    slot.type = slot.type === "extra" ? "extra" : "break";
+    slot.reason ||= "";
+  });
+
+  data.holidays.forEach((holiday) => {
+    holiday.id ||= makeRecordId("holiday");
+    holiday.userId ||= GLOBAL_HOLIDAY_USER_ID;
+    holiday.name ||= "Holiday";
+  });
+
   data.systems.forEach((system) => {
     system.primaryUserIds = system.primaryUserIds.filter((userId) => data.users.some((user) => user.id === userId));
     if (!(system.id in data.queues)) {
@@ -702,6 +966,113 @@ function normalizeData() {
     }
     clampQueue(system.id);
   });
+}
+
+function setDefaultDates() {
+  const today = getEasternNow().date;
+  elements.timelineDateInput.value ||= today;
+  elements.holidayDateInput.value ||= today;
+}
+
+function timelineBlock(start, end, className, label) {
+  return `<div class="timeline-block ${className}" style="${timeRangeStyle(start, end)}">${escapeHtml(label)} · ${start}–${end}</div>`;
+}
+
+function timeRangeStyle(start, end) {
+  const startMinutes = Math.max(toMinutes(start), TIMELINE_START_MINUTES);
+  const endMinutes = Math.min(toMinutes(end), TIMELINE_END_MINUTES);
+  const total = TIMELINE_END_MINUTES - TIMELINE_START_MINUTES;
+  const left = ((startMinutes - TIMELINE_START_MINUTES) / total) * 100;
+  const width = Math.max(((endMinutes - startMinutes) / total) * 100, 1);
+  return `left:${left}%;width:${width}%;`;
+}
+
+function getEasternNow() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: EASTERN_TIME_ZONE,
+    weekday: "long",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(new Date());
+
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const time = `${values.hour}:${values.minute}`;
+
+  return {
+    day: values.weekday,
+    date: `${values.year}-${values.month}-${values.day}`,
+    time,
+    minutes: toMinutes(time)
+  };
+}
+
+function getDayNameFromDate(date) {
+  const [year, month, day] = date.split("-").map(Number);
+  const utcDate = new Date(Date.UTC(year, month - 1, day, 12));
+  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(utcDate);
+}
+
+function isWithinWindow(currentMinutes, startMinutes, endMinutes) {
+  if (startMinutes <= endMinutes) {
+    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  }
+
+  return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+}
+
+function toMinutes(time) {
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(totalMinutes) {
+  const normalized = Math.max(0, Math.min(totalMinutes, 24 * 60 - 1));
+  const hours = Math.floor(normalized / 60).toString().padStart(2, "0");
+  const minutes = (normalized % 60).toString().padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function roundToNearestSlot(minutes) {
+  return Math.round(minutes / SLOT_MINUTES) * SLOT_MINUTES;
+}
+
+function isValidTimeRange(start, end) {
+  return Boolean(start && end && start !== end);
+}
+
+function getQueueIndex(system) {
+  return Math.min(Math.max(Number(data.queues[system.id] || 0), 0), Math.max(system.primaryUserIds.length - 1, 0));
+}
+
+function clampQueue(systemId) {
+  const system = data.systems.find((item) => item.id === systemId);
+  if (!system || system.primaryUserIds.length === 0) {
+    data.queues[systemId] = 0;
+    return;
+  }
+
+  data.queues[systemId] = getQueueIndex(system);
+}
+
+function rotate(items, startIndex) {
+  if (items.length === 0) {
+    return [];
+  }
+
+  return items.slice(startIndex).concat(items.slice(0, startIndex));
+}
+
+function getShiftLabel(shiftType) {
+  return SHIFT_TEMPLATES[shiftType]?.label || "Custom time";
+}
+
+function inferShiftType(start, end) {
+  const match = Object.entries(SHIFT_TEMPLATES).find(([key, template]) => key !== "custom" && template.start === start && template.end === end);
+  return match?.[0] || "custom";
 }
 
 function makeId(name, existingIds) {

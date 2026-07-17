@@ -9,53 +9,67 @@
   <body>
     <header class="hero">
       <div>
-        <p class="eyebrow">Local-only team scheduler</p>
-        <h1>SME Scheduler</h1>
-        <p class="subtitle">Pick a system, see the current SME queue, and track assignments without a server or database.</p>
+        <p class="eyebrow">Primary user view</p>
+        <h1>SME Assignment Queue</h1>
+        <p class="subtitle">Choose a system, review today’s queue, and assign the right SME without opening admin tools.</p>
       </div>
-      <div class="time-card">
-        <span>Current Eastern Time</span>
-        <strong id="currentEtTime">--</strong>
+      <div class="hero-actions">
+        <div class="time-card">
+          <span>Current Eastern Time</span>
+          <strong id="currentEtTime">--</strong>
+        </div>
+        <button id="adminToggleButton" class="secondary-button" type="button">Admin tools</button>
       </div>
     </header>
 
     <main class="shell">
-      <section class="panel assign-panel">
+      <section class="panel assignment-widget">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Assign</p>
-            <h2>Next task owner</h2>
+            <p class="eyebrow">Assign task</p>
+            <h2>Coverage queue</h2>
           </div>
           <button id="refreshButton" class="secondary-button" type="button">Refresh</button>
         </div>
 
-        <label class="field">
+        <label class="field large-field">
           <span>System / app</span>
           <select id="assignmentSystemSelect"></select>
         </label>
 
         <div id="suggestionCard" class="suggestion-card"></div>
-        <button id="markAssignedButton" class="primary-button" type="button">Mark suggested user assigned</button>
 
-        <h3>Primary queue</h3>
-        <div id="queueList" class="stack-list"></div>
+        <div class="section-heading tight">
+          <div>
+            <h3>Today’s assigned SME queue</h3>
+            <p class="help-text">Available users are highlighted. Later-starting users are grayed out but can still be picked manually.</p>
+          </div>
+        </div>
+        <div id="queueList" class="queue-grid"></div>
+
+        <div class="assignment-actions">
+          <button id="markAssignedButton" class="primary-button" type="button">Mark selected user assigned</button>
+          <p id="selectedAssigneeText" class="help-text">Select a user from the queue.</p>
+        </div>
 
         <h3>Recent assignments</h3>
         <div id="assignmentLog" class="stack-list compact"></div>
       </section>
 
-      <section class="panel admin-panel">
+      <section id="adminPanel" class="panel admin-panel hidden">
         <div class="section-heading">
           <div>
             <p class="eyebrow">Admin</p>
-            <h2>Users, schedules, and coverage</h2>
+            <h2>Users, schedules, coverage, and exceptions</h2>
           </div>
+          <button id="closeAdminButton" class="secondary-button" type="button">Close admin</button>
         </div>
 
         <div class="tabs" role="tablist" aria-label="Admin sections">
           <button class="tab-button active" type="button" data-tab="users">Users</button>
           <button class="tab-button" type="button" data-tab="schedules">Schedules</button>
           <button class="tab-button" type="button" data-tab="systems">Systems / apps</button>
+          <button class="tab-button" type="button" data-tab="holidays">Holidays</button>
           <button class="tab-button" type="button" data-tab="data">Data</button>
         </div>
 
@@ -71,33 +85,89 @@
         </section>
 
         <section id="schedulesTab" class="tab-panel">
-          <form id="addScheduleForm" class="schedule-form">
-            <label class="field">
-              <span>User</span>
-              <select id="scheduleUserSelect"></select>
-            </label>
-            <fieldset>
-              <legend>Days in Eastern Time</legend>
-              <div id="dayCheckboxes" class="checkbox-grid"></div>
-            </fieldset>
-            <div class="two-columns">
+          <div class="admin-grid">
+            <form id="addScheduleForm" class="schedule-form card-form">
+              <h3>Weekly schedule</h3>
               <label class="field">
-                <span>Start</span>
-                <input id="scheduleStartInput" type="time" value="09:00" required>
+                <span>User</span>
+                <select id="scheduleUserSelect"></select>
               </label>
               <label class="field">
-                <span>End</span>
-                <input id="scheduleEndInput" type="time" value="17:00" required>
+                <span>Quick shift</span>
+                <select id="shiftTemplateSelect">
+                  <option value="early">Early shift · 07:00–15:00</option>
+                  <option value="regular" selected>Regular shift · 09:00–17:00</option>
+                  <option value="late">Late shift · 11:00–19:00</option>
+                  <option value="custom">Custom time</option>
+                </select>
               </label>
+              <fieldset>
+                <legend>Days in Eastern Time</legend>
+                <div id="dayCheckboxes" class="checkbox-grid"></div>
+              </fieldset>
+              <div class="two-columns">
+                <label class="field">
+                  <span>Start</span>
+                  <input id="scheduleStartInput" type="time" value="09:00" required>
+                </label>
+                <label class="field">
+                  <span>End</span>
+                  <input id="scheduleEndInput" type="time" value="17:00" required>
+                </label>
+              </div>
+              <label class="field">
+                <span>Priority</span>
+                <input id="schedulePriorityInput" type="number" min="1" step="1" value="1" required>
+              </label>
+              <button class="primary-button" type="submit">Add schedule</button>
+            </form>
+
+            <div class="card-form">
+              <h3>Day timeline</h3>
+              <div class="two-columns">
+                <label class="field">
+                  <span>User</span>
+                  <select id="timelineUserSelect"></select>
+                </label>
+                <label class="field">
+                  <span>Date</span>
+                  <input id="timelineDateInput" type="date">
+                </label>
+              </div>
+              <div class="timeline-help">Click the timeline to prefill a 30-minute slot.</div>
+              <div id="timelineCanvas" class="timeline" role="button" tabindex="0" aria-label="Schedule timeline"></div>
+
+              <form id="addSlotForm" class="slot-form">
+                <div class="three-columns">
+                  <label class="field">
+                    <span>Slot type</span>
+                    <select id="slotTypeSelect">
+                      <option value="break">Break / doctor visit</option>
+                      <option value="extra">Extra coverage slot</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Start</span>
+                    <input id="slotStartInput" type="time" value="12:00" required>
+                  </label>
+                  <label class="field">
+                    <span>End</span>
+                    <input id="slotEndInput" type="time" value="12:30" required>
+                  </label>
+                </div>
+                <label class="field">
+                  <span>Reason / note</span>
+                  <input id="slotReasonInput" type="text" placeholder="Example: Doctor visit">
+                </label>
+                <button class="primary-button" type="submit">Add timeline slot</button>
+              </form>
             </div>
-            <label class="field">
-              <span>Priority</span>
-              <input id="schedulePriorityInput" type="number" min="1" step="1" value="1" required>
-            </label>
-            <button class="primary-button" type="submit">Add schedule</button>
-          </form>
-          <p class="help-text">Times are interpreted as Eastern Time. Lower priority numbers are selected first for fallback coverage.</p>
+          </div>
+
+          <h3>Schedules</h3>
           <div id="scheduleList" class="stack-list"></div>
+          <h3>Breaks and extra slots</h3>
+          <div id="slotsList" class="stack-list"></div>
         </section>
 
         <section id="systemsTab" class="tab-panel">
@@ -108,8 +178,28 @@
             </label>
             <button class="primary-button" type="submit">Add system</button>
           </form>
-          <p class="help-text">Checked users are primary SMEs. Their order below is the rotation order.</p>
+          <p class="help-text">Checked users are primary SMEs. Their order below controls the rotation queue.</p>
           <div id="systemsList" class="stack-list"></div>
+        </section>
+
+        <section id="holidaysTab" class="tab-panel">
+          <form id="addHolidayForm" class="inline-form">
+            <label class="field">
+              <span>User</span>
+              <select id="holidayUserSelect"></select>
+            </label>
+            <label class="field">
+              <span>Date</span>
+              <input id="holidayDateInput" type="date" required>
+            </label>
+            <label class="field">
+              <span>Holiday / note</span>
+              <input id="holidayNameInput" type="text" placeholder="Example: PTO">
+            </label>
+            <button class="primary-button" type="submit">Add holiday</button>
+          </form>
+          <p class="help-text">Use “All users” for team holidays. Holidays remove users from availability for that date.</p>
+          <div id="holidaysList" class="stack-list"></div>
         </section>
 
         <section id="dataTab" class="tab-panel">
@@ -121,15 +211,11 @@
             </label>
             <button id="resetButton" class="danger-button" type="button">Reset sample data</button>
           </div>
-          <p class="help-text">The app saves automatically in this browser. Export JSON before committing or moving data to another computer.</p>
+          <p class="help-text">The app saves automatically in this browser. Export JSON before moving data to another computer.</p>
           <textarea id="dataPreview" readonly></textarea>
         </section>
       </section>
     </main>
-
-    <template id="emptyStateTemplate">
-      <div class="empty-state">Nothing here yet.</div>
-    </template>
 
     <script src="app.js"></script>
   </body>
