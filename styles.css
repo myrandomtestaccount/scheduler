@@ -637,12 +637,40 @@ fieldset {
   position: relative;
 }
 
+.graph-lane.has-floating-labels {
+  min-height: 3.25rem;
+}
+
+.graph-lane.has-floating-labels .graph-block {
+  top: 1.55rem;
+}
+
+.graph-lane.has-floating-labels .graph-block.holiday {
+  top: 0.5rem;
+}
+
 .graph-empty {
   color: var(--muted);
   font-size: 0.8rem;
   left: 0.7rem;
   position: absolute;
   top: 0.7rem;
+}
+
+.graph-floating-label {
+  background: rgba(234, 240, 255, 0.96);
+  border: 1px solid #cbd8ff;
+  border-radius: 999px;
+  color: var(--primary);
+  font-size: 0.68rem;
+  font-weight: 950;
+  padding: 0.16rem 0.42rem;
+  pointer-events: none;
+  position: absolute;
+  top: 0.22rem;
+  transform: translateX(-0.15rem);
+  white-space: nowrap;
+  z-index: 5;
 }
 
 .graph-block {

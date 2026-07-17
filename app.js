@@ -484,15 +484,26 @@ function renderTimeline() {
 function renderDayScheduleGraph(date) {
   const day = getDayNameFromDate(date);
   const rows = data.users.map((user) => {
-    const blocks = getGraphBlocksForUser(user, date, day)
-      .map((block) => graphBlock(block))
+    const graphBlocks = getGraphBlocksForUser(user, date, day);
+    const coveredScheduleIds = new Set(
+      graphBlocks
+        .filter((block) => isScheduleCovered(block, graphBlocks))
+        .map((block) => block.id)
+    );
+    const labels = graphBlocks
+      .filter((block) => coveredScheduleIds.has(block.id))
+      .map((block) => graphFloatingLabel(block))
       .join("");
+    const blocks = graphBlocks
+      .map((block) => graphBlock(block, { hideLabel: coveredScheduleIds.has(block.id) }))
+      .join("");
+    const laneClass = coveredScheduleIds.size > 0 ? "graph-lane has-floating-labels" : "graph-lane";
 
     return `
       <div class="graph-row">
         <div class="graph-user">${escapeHtml(user.name)}</div>
-        <div class="graph-lane" data-user-id="${escapeHtml(user.id)}" data-date="${escapeHtml(date)}">
-          ${blocks || "<span class=\"graph-empty\">Click to add</span>"}
+        <div class="${laneClass}" data-user-id="${escapeHtml(user.id)}" data-date="${escapeHtml(date)}">
+          ${labels}${blocks || "<span class=\"graph-empty\">Click to add</span>"}
         </div>
       </div>
     `;
@@ -577,6 +588,16 @@ function getGraphBlocksForUser(user, date, day) {
     }));
 
   return scheduleBlocks.concat(breakBlocks).sort((left, right) => toMinutes(left.start) - toMinutes(right.start));
+}
+
+function isScheduleCovered(block, blocks) {
+  return block.type === "schedule" && blocks.some((otherBlock) => (
+    ["break", "extra"].includes(otherBlock.type) && graphBlocksOverlap(block, otherBlock)
+  ));
+}
+
+function graphBlocksOverlap(leftBlock, rightBlock) {
+  return toMinutes(leftBlock.start) < toMinutes(rightBlock.end) && toMinutes(rightBlock.start) < toMinutes(leftBlock.end);
 }
 
 function renderSlots() {
@@ -1356,14 +1377,19 @@ function setDefaultDates() {
   }
 }
 
-function graphBlock(block) {
+function graphBlock(block, options = {}) {
   const label = formatGraphBlockText(block.start, block.end, block.type, block.label);
   return `
     <span class="graph-block ${block.type}" style="${timeRangeStyle(block.start, block.end)}" title="${escapeHtml(label)}">
-      <span>${escapeHtml(label)}</span>
+      ${options.hideLabel ? "" : `<span>${escapeHtml(label)}</span>`}
       ${graphRemoveButton(block)}
     </span>
   `;
+}
+
+function graphFloatingLabel(block) {
+  const label = formatGraphBlockText(block.start, block.end, block.type, block.label);
+  return `<span class="graph-floating-label" style="${timeStartStyle(block.start)}">${escapeHtml(label)}</span>`;
 }
 
 function weekGraphPill(block) {
@@ -1424,6 +1450,13 @@ function timeRangeStyle(start, end) {
   const left = ((startMinutes - TIMELINE_START_MINUTES) / total) * 100;
   const width = Math.max(((endMinutes - startMinutes) / total) * 100, 1);
   return `left:${left}%;width:${width}%;`;
+}
+
+function timeStartStyle(start) {
+  const startMinutes = Math.max(toMinutes(start), TIMELINE_START_MINUTES);
+  const total = TIMELINE_END_MINUTES - TIMELINE_START_MINUTES;
+  const left = Math.min(((startMinutes - TIMELINE_START_MINUTES) / total) * 100, 92);
+  return `left:${left}%;`;
 }
 
 function getEasternNow() {
