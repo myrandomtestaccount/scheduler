@@ -82,11 +82,14 @@ const elements = {
   shiftEndInput: document.querySelector("#shiftEndInput"),
   shiftsList: document.querySelector("#shiftsList"),
   scheduleViewSelect: document.querySelector("#scheduleViewSelect"),
+  graphDateLabel: document.querySelector("#graphDateLabel"),
+  graphDateHelp: document.querySelector("#graphDateHelp"),
   timelineUserSelect: document.querySelector("#timelineUserSelect"),
   timelineDateInput: document.querySelector("#timelineDateInput"),
   timelineCanvas: document.querySelector("#timelineCanvas"),
   addSlotForm: document.querySelector("#addSlotForm"),
   slotTypeSelect: document.querySelector("#slotTypeSelect"),
+  slotDateInput: document.querySelector("#slotDateInput"),
   slotStartInput: document.querySelector("#slotStartInput"),
   slotEndInput: document.querySelector("#slotEndInput"),
   slotReasonInput: document.querySelector("#slotReasonInput"),
@@ -443,8 +446,23 @@ function renderTimelineTools() {
     return;
   }
 
+  updateGraphDateCopy();
   renderTimeline();
   renderSlots();
+}
+
+function updateGraphDateCopy() {
+  const isWeekView = elements.scheduleViewSelect?.value === "week";
+
+  if (elements.graphDateLabel) {
+    elements.graphDateLabel.textContent = isWeekView ? "Week containing date" : "Schedule date";
+  }
+
+  if (elements.graphDateHelp) {
+    elements.graphDateHelp.textContent = isWeekView
+      ? "Week view shows the Monday–Sunday week containing this date. Click a day cell to prefill that user/day."
+      : "Day view shows this exact date. Click a user row to prefill a 30-minute schedule.";
+  }
 }
 
 function renderTimeline() {
@@ -843,10 +861,15 @@ function addTimelineSlot(event) {
     return;
   }
 
+  if (!elements.slotDateInput.value) {
+    window.alert("Choose a break or extra slot date.");
+    return;
+  }
+
   data.exceptions.push({
     id: makeRecordId("slot"),
     userId: user.id,
-    date: elements.timelineDateInput.value || getEasternNow().date,
+    date: elements.slotDateInput.value,
     type: elements.slotTypeSelect.value,
     start: elements.slotStartInput.value,
     end: elements.slotEndInput.value,
@@ -890,6 +913,9 @@ function prefillSlotFromTimeline(event) {
   const ratio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
   const rawMinutes = TIMELINE_START_MINUTES + ratio * (TIMELINE_END_MINUTES - TIMELINE_START_MINUTES);
   const startMinutes = Math.min(roundToNearestSlot(rawMinutes), TIMELINE_END_MINUTES - SLOT_MINUTES);
+  if (elements.slotDateInput && elements.timelineDateInput?.value) {
+    elements.slotDateInput.value = elements.timelineDateInput.value;
+  }
   elements.slotStartInput.value = minutesToTime(startMinutes);
   elements.slotEndInput.value = minutesToTime(startMinutes + SLOT_MINUTES);
 }
@@ -1311,6 +1337,10 @@ function setDefaultDates() {
   const today = getEasternNow().date;
   if (elements.timelineDateInput) {
     elements.timelineDateInput.value ||= today;
+  }
+
+  if (elements.slotDateInput) {
+    elements.slotDateInput.value ||= today;
   }
 
   if (elements.holidayDateInput) {

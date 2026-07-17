@@ -102,19 +102,30 @@
                   </select>
                 </label>
                 <label class="field">
-                  <span>Starting date</span>
+                  <span id="graphDateLabel">Schedule date</span>
                   <input id="timelineDateInput" type="date">
                 </label>
               </div>
-              <div class="timeline-help">Day view: click a user row to prefill a 30-minute schedule. Week view: click a day cell to prefill that user/day.</div>
+              <div id="graphDateHelp" class="timeline-help">Day view shows this exact date. Click a user row to prefill a 30-minute schedule.</div>
               <div id="timelineCanvas" class="schedule-graph" aria-label="Schedule graph"></div>
+            </div>
 
-              <form id="addSlotForm" class="slot-form">
+            <section class="card-form wide-card">
+              <div>
                 <h3>Breaks and extra slots</h3>
-                <label class="field">
-                  <span>User</span>
-                  <select id="timelineUserSelect"></select>
-                </label>
+                <p class="help-text">Add one-off breaks, doctor visits, or extra coverage for a specific date.</p>
+              </div>
+              <form id="addSlotForm" class="slot-form">
+                <div class="two-columns">
+                  <label class="field">
+                    <span>User</span>
+                    <select id="timelineUserSelect"></select>
+                  </label>
+                  <label class="field">
+                    <span>Date</span>
+                    <input id="slotDateInput" type="date" required>
+                  </label>
+                </div>
                 <div class="three-columns">
                   <label class="field">
                     <span>Slot type</span>
@@ -138,11 +149,13 @@
                 </label>
                 <button class="primary-button" type="submit">Add timeline slot</button>
               </form>
-            </div>
-          </div>
 
-          <h3>Breaks and extra slots</h3>
-          <div id="slotsList" class="stack-list"></div>
+              <div>
+                <h3>Existing breaks and extra slots</h3>
+                <div id="slotsList" class="stack-list"></div>
+              </div>
+            </section>
+          </div>
         </section>
 
         <section id="shiftsTab" class="tab-panel">

@@ -521,6 +521,10 @@ fieldset {
   grid-template-columns: minmax(18rem, 0.85fr) minmax(24rem, 1.15fr);
 }
 
+.wide-card {
+  grid-column: 1 / -1;
+}
+
 .checkbox-grid {
   display: grid;
   gap: 0.45rem;
