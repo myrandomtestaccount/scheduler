@@ -569,6 +569,8 @@ function getGraphBlocksForUser(user, date, day) {
     .filter((slot) => slot.userId === user.id && slot.date === date && slot.type === "break")
     .map((slot) => ({
       type: "break",
+      id: slot.id,
+      userId: user.id,
       start: slot.start,
       end: slot.end,
       label: slot.reason || "Break"
@@ -889,6 +891,12 @@ function prefillSlotFromTimeline(event) {
   const removeButton = event.target.closest("[data-action='remove-schedule']");
   if (removeButton) {
     removeSchedule(removeButton.dataset.userId, removeButton.dataset.scheduleId);
+    return;
+  }
+
+  const removeSlotButton = event.target.closest("[data-action='remove-slot']");
+  if (removeSlotButton) {
+    removeTimelineSlot(removeSlotButton.dataset.slotId);
     return;
   }
 
@@ -1349,38 +1357,52 @@ function setDefaultDates() {
 }
 
 function graphBlock(block) {
+  const label = formatGraphBlockText(block.start, block.end, block.type, block.label);
   return `
-    <span class="graph-block ${block.type}" style="${timeRangeStyle(block.start, block.end)}">
-      <span>${escapeHtml(formatGraphBlockText(block.start, block.end, block.type, block.label))}</span>
-      ${scheduleRemoveButton(block)}
+    <span class="graph-block ${block.type}" style="${timeRangeStyle(block.start, block.end)}" title="${escapeHtml(label)}">
+      <span>${escapeHtml(label)}</span>
+      ${graphRemoveButton(block)}
     </span>
   `;
 }
 
 function weekGraphPill(block) {
+  const label = formatGraphBlockText(block.start, block.end, block.type, block.label);
   return `
     <span class="week-pill ${block.type}">
-      <span>${escapeHtml(formatGraphBlockText(block.start, block.end, block.type, block.label))}</span>
-      ${scheduleRemoveButton(block)}
+      <span>${escapeHtml(label)}</span>
+      ${graphRemoveButton(block)}
     </span>
   `;
 }
 
-function scheduleRemoveButton(block) {
-  if (block.type !== "schedule") {
-    return "";
+function graphRemoveButton(block) {
+  if (block.type === "schedule") {
+    return `
+      <button
+        class="graph-remove"
+        type="button"
+        data-action="remove-schedule"
+        data-user-id="${escapeHtml(block.userId)}"
+        data-schedule-id="${escapeHtml(block.id)}"
+        aria-label="Remove schedule ${escapeHtml(block.start)} to ${escapeHtml(block.end)}"
+      >×</button>
+    `;
   }
 
-  return `
-    <button
-      class="graph-remove"
-      type="button"
-      data-action="remove-schedule"
-      data-user-id="${escapeHtml(block.userId)}"
-      data-schedule-id="${escapeHtml(block.id)}"
-      aria-label="Remove schedule ${escapeHtml(block.start)} to ${escapeHtml(block.end)}"
-    >×</button>
-  `;
+  if (block.type === "break" || block.type === "extra") {
+    return `
+      <button
+        class="graph-remove"
+        type="button"
+        data-action="remove-slot"
+        data-slot-id="${escapeHtml(block.id)}"
+        aria-label="Remove ${block.type === "break" ? "break" : "extra slot"} ${escapeHtml(block.start)} to ${escapeHtml(block.end)}"
+      >×</button>
+    `;
+  }
+
+  return "";
 }
 
 function formatGraphBlockText(start, end, type, label) {
