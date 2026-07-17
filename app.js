@@ -533,7 +533,7 @@ function renderWeekScheduleGraph(date) {
       const day = getDayNameFromDate(weekDate);
       const blocks = getGraphBlocksForUser(user, weekDate, day)
         .filter((block) => block.type !== "break")
-        .map((block) => `<span class="week-pill ${block.type}">${escapeHtml(block.label)} · ${block.start}–${block.end}</span>`)
+        .map((block) => `<span class="week-pill ${block.type}">${escapeHtml(formatGraphBlockText(block.start, block.end, block.type, block.label))}</span>`)
         .join("");
 
       return `
@@ -1341,7 +1341,19 @@ function setDefaultDates() {
 }
 
 function graphBlock(start, end, className, label) {
-  return `<span class="graph-block ${className}" style="${timeRangeStyle(start, end)}">${escapeHtml(label)} · ${start}–${end}</span>`;
+  return `<span class="graph-block ${className}" style="${timeRangeStyle(start, end)}">${escapeHtml(formatGraphBlockText(start, end, className, label))}</span>`;
+}
+
+function formatGraphBlockText(start, end, type, label) {
+  if (type === "schedule") {
+    return `${start}–${end}`;
+  }
+
+  if (type === "holiday") {
+    return label;
+  }
+
+  return `${label} · ${start}–${end}`;
 }
 
 function timeRangeStyle(start, end) {
