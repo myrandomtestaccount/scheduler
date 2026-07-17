@@ -125,6 +125,17 @@ button:disabled {
   padding: 0 clamp(1rem, 4vw, 4rem) 3rem;
 }
 
+.primary-hero,
+.primary-shell {
+  margin-inline: auto;
+  max-width: 96rem;
+  width: 100%;
+}
+
+.primary-hero {
+  padding-bottom: 1rem;
+}
+
 .panel {
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.9);
@@ -134,7 +145,43 @@ button:disabled {
 }
 
 .assignment-widget {
-  max-width: 76rem;
+  max-width: none;
+}
+
+.assignment-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.assignment-toolbar {
+  align-items: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
+}
+
+.assignment-toolbar .secondary-button,
+.assignment-toolbar .secondary-link {
+  min-height: 3.45rem;
+}
+
+.compact-time-card {
+  background: var(--primary-soft);
+  border-color: #d9e3ff;
+  border-radius: 14px;
+  box-shadow: none;
+  min-width: 14rem;
+  padding: 0.65rem 0.85rem;
+}
+
+.compact-time-card strong {
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 
 .section-heading,
@@ -754,11 +801,16 @@ fieldset {
   }
 
   .inline-form,
+  .assignment-header,
   .section-heading,
   .button-row,
   .assignment-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .assignment-toolbar {
+    justify-content: stretch;
   }
 
   .hero-actions {

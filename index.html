@@ -7,29 +7,29 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <header class="hero">
+    <header class="hero primary-hero">
       <div>
         <p class="eyebrow">Primary user view</p>
         <h1>SME Assignment Queue</h1>
         <p class="subtitle">Choose a system, review today’s queue, and assign the right SME.</p>
       </div>
-      <div class="hero-actions">
-        <div class="time-card">
-          <span>Current Eastern Time</span>
-          <strong id="currentEtTime">--</strong>
-        </div>
-        <a class="secondary-link" href="admin.html">Admin tools</a>
-      </div>
     </header>
 
-    <main class="shell">
+    <main class="shell primary-shell">
       <section class="panel assignment-widget">
-        <div class="section-heading">
+        <div class="assignment-header">
           <div>
             <p class="eyebrow">Assign task</p>
             <h2>Coverage queue</h2>
           </div>
-          <button id="refreshButton" class="secondary-button" type="button">Refresh</button>
+          <div class="assignment-toolbar">
+            <div class="time-card compact-time-card">
+              <span>Current Eastern Time</span>
+              <strong id="currentEtTime">--</strong>
+            </div>
+            <a class="secondary-link" href="admin.html">Admin tools</a>
+            <button id="refreshButton" class="secondary-button" type="button">Refresh</button>
+          </div>
         </div>
 
         <label class="field large-field">
