@@ -64,7 +64,6 @@ const elements = {
   selectedAssigneeText: document.querySelector("#selectedAssigneeText"),
   queueList: document.querySelector("#queueList"),
   assignmentLog: document.querySelector("#assignmentLog"),
-  refreshButton: document.querySelector("#refreshButton"),
   addUserForm: document.querySelector("#addUserForm"),
   userNameInput: document.querySelector("#userNameInput"),
   usersList: document.querySelector("#usersList"),
@@ -75,7 +74,6 @@ const elements = {
   scheduleStartInput: document.querySelector("#scheduleStartInput"),
   scheduleEndInput: document.querySelector("#scheduleEndInput"),
   schedulePriorityInput: document.querySelector("#schedulePriorityInput"),
-  scheduleList: document.querySelector("#scheduleList"),
   addShiftForm: document.querySelector("#addShiftForm"),
   shiftNameInput: document.querySelector("#shiftNameInput"),
   shiftStartInput: document.querySelector("#shiftStartInput"),
@@ -117,7 +115,6 @@ function bindEvents() {
     button.addEventListener("click", () => activateTab(button.dataset.tab));
   });
 
-  on(elements.refreshButton, "click", render);
   on(elements.assignmentSystemSelect, "change", () => {
     selectedAssigneeId = null;
     renderClockAndAssignment();
@@ -166,7 +163,6 @@ function render() {
   renderShiftTemplateSelect();
   renderShifts();
   renderUsers();
-  renderSchedules();
   renderSystems();
   renderHolidays();
   renderTimelineTools();
@@ -428,46 +424,6 @@ function renderDayCheckboxes() {
   `).join("");
 }
 
-function renderSchedules() {
-  if (!elements.scheduleList) {
-    return;
-  }
-
-  const rows = data.users.map((user) => {
-    const dayRows = DAYS.map((day) => {
-      const schedules = user.schedules.filter((schedule) => schedule.days.includes(day));
-      const pills = schedules.map((schedule) => `
-        <span class="schedule-pill">
-          ${escapeHtml(getShiftLabel(schedule.shiftType))} · ${schedule.start}–${schedule.end}
-          <button type="button" data-action="remove-schedule" data-user-id="${escapeHtml(user.id)}" data-schedule-id="${escapeHtml(schedule.id)}" aria-label="Remove ${escapeHtml(day)} schedule">×</button>
-        </span>
-      `).join("");
-
-      return `
-        <div class="schedule-day-row">
-          <div class="schedule-day-name">${day.slice(0, 3)}</div>
-          <div class="schedule-day-slots">${pills || "<span class=\"meta\">No schedule</span>"}</div>
-        </div>
-      `;
-    }).join("");
-
-    return `
-      <article class="schedule-user-card">
-        <div class="section-heading tight">
-          <h3>${escapeHtml(user.name)}</h3>
-          <span class="meta">${user.schedules.length} schedule block${user.schedules.length === 1 ? "" : "s"}</span>
-        </div>
-        ${dayRows}
-      </article>
-    `;
-  }).join("");
-
-  elements.scheduleList.innerHTML = rows || emptyState("Add users before creating schedules.");
-  elements.scheduleList.querySelectorAll("[data-action='remove-schedule']").forEach((button) => {
-    button.addEventListener("click", () => removeSchedule(button.dataset.userId, button.dataset.scheduleId));
-  });
-}
-
 function renderTimelineTools() {
   if (!elements.timelineCanvas && !elements.slotsList) {
     return;
@@ -497,7 +453,7 @@ function renderDayScheduleGraph(date) {
   const day = getDayNameFromDate(date);
   const rows = data.users.map((user) => {
     const blocks = getGraphBlocksForUser(user, date, day)
-      .map((block) => graphBlock(block.start, block.end, block.type, block.label))
+      .map((block) => graphBlock(block))
       .join("");
 
     return `
@@ -533,13 +489,13 @@ function renderWeekScheduleGraph(date) {
       const day = getDayNameFromDate(weekDate);
       const blocks = getGraphBlocksForUser(user, weekDate, day)
         .filter((block) => block.type !== "break")
-        .map((block) => `<span class="week-pill ${block.type}">${escapeHtml(formatGraphBlockText(block.start, block.end, block.type, block.label))}</span>`)
+        .map((block) => weekGraphPill(block))
         .join("");
 
       return `
-        <button class="week-cell" type="button" data-user-id="${escapeHtml(user.id)}" data-date="${escapeHtml(weekDate)}">
+        <div class="week-cell" data-user-id="${escapeHtml(user.id)}" data-date="${escapeHtml(weekDate)}">
           ${blocks || "<span class=\"meta\">No schedule</span>"}
-        </button>
+        </div>
       `;
     }).join("");
 
@@ -570,6 +526,8 @@ function getGraphBlocksForUser(user, date, day) {
   const scheduleBlocks = getScheduleWindowsForDate(user, date, day)
     .map((window) => ({
       type: window.source === "extra" ? "extra" : "schedule",
+      id: window.id,
+      userId: user.id,
       start: window.start,
       end: window.end,
       label: window.source === "extra" ? "Extra" : "Schedule"
@@ -891,6 +849,12 @@ function removeTimelineSlot(slotId) {
 }
 
 function prefillSlotFromTimeline(event) {
+  const removeButton = event.target.closest("[data-action='remove-schedule']");
+  if (removeButton) {
+    removeSchedule(removeButton.dataset.userId, removeButton.dataset.scheduleId);
+    return;
+  }
+
   const lane = event.target.closest(".graph-lane");
   if (lane) {
     const rect = lane.getBoundingClientRect();
@@ -1169,11 +1133,11 @@ function getUserStatus(user, easternNow) {
 function getScheduleWindowsForDate(user, date, day) {
   const scheduleWindows = user.schedules
     .filter((schedule) => schedule.days.includes(day))
-    .map((schedule) => ({ source: "schedule", start: schedule.start, end: schedule.end }));
+    .map((schedule) => ({ id: schedule.id, source: "schedule", start: schedule.start, end: schedule.end }));
 
   const extraWindows = data.exceptions
     .filter((slot) => slot.userId === user.id && slot.date === date && slot.type === "extra")
-    .map((slot) => ({ source: "extra", start: slot.start, end: slot.end }));
+    .map((slot) => ({ id: slot.id, source: "extra", start: slot.start, end: slot.end }));
 
   return scheduleWindows
     .concat(extraWindows)
@@ -1340,8 +1304,39 @@ function setDefaultDates() {
   }
 }
 
-function graphBlock(start, end, className, label) {
-  return `<span class="graph-block ${className}" style="${timeRangeStyle(start, end)}">${escapeHtml(formatGraphBlockText(start, end, className, label))}</span>`;
+function graphBlock(block) {
+  return `
+    <span class="graph-block ${block.type}" style="${timeRangeStyle(block.start, block.end)}">
+      <span>${escapeHtml(formatGraphBlockText(block.start, block.end, block.type, block.label))}</span>
+      ${scheduleRemoveButton(block)}
+    </span>
+  `;
+}
+
+function weekGraphPill(block) {
+  return `
+    <span class="week-pill ${block.type}">
+      <span>${escapeHtml(formatGraphBlockText(block.start, block.end, block.type, block.label))}</span>
+      ${scheduleRemoveButton(block)}
+    </span>
+  `;
+}
+
+function scheduleRemoveButton(block) {
+  if (block.type !== "schedule") {
+    return "";
+  }
+
+  return `
+    <button
+      class="graph-remove"
+      type="button"
+      data-action="remove-schedule"
+      data-user-id="${escapeHtml(block.userId)}"
+      data-schedule-id="${escapeHtml(block.id)}"
+      aria-label="Remove schedule ${escapeHtml(block.start)} to ${escapeHtml(block.end)}"
+    >×</button>
+  `;
 }
 
 function formatGraphBlockText(start, end, type, label) {
@@ -1467,10 +1462,6 @@ function rotate(items, startIndex) {
   }
 
   return items.slice(startIndex).concat(items.slice(0, startIndex));
-}
-
-function getShiftLabel(shiftType) {
-  return getShiftTemplate(shiftType)?.name || "Custom time";
 }
 
 function inferShiftType(start, end) {
