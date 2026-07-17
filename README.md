@@ -8,6 +8,8 @@ Open `index.html` in a browser.
 
 The same files work on macOS and Windows 11, so you can test on a Mac and copy the folder to a Windows PC.
 
+Open `admin.html` for admin tools.
+
 ## Features
 
 - Primary users land on the assignment queue, not the admin dashboard.
@@ -16,7 +18,7 @@ The same files work on macOS and Windows 11, so you can test on a Mac and copy t
 - SMEs who are scheduled later today are grayed out with their login time and can still be picked manually.
 - SMEs who are not scheduled, done for the day, or on holiday are disabled.
 - Mark a selected SME assigned and advance the queue.
-- Admin tools are hidden behind the `Admin tools` button.
+- Admin tools live on a separate `admin.html` page.
 - Admins can add/remove users, systems/apps, schedules, breaks, extra slots, and holidays.
 - Schedules support quick `Early`, `Regular`, and `Late` shift templates.
 - Timeline view lets admins click a day graph to prefill breaks or extra coverage slots.
@@ -40,7 +42,7 @@ Because this version has no server or database, saved data belongs to the browse
 
 ## Admin Flow
 
-Click `Admin tools` from the main page.
+Click `Admin tools` from the main page, or open `admin.html` directly.
 
 Admin sections:
 
@@ -62,6 +64,7 @@ This repository is intentionally small:
 
 ```text
 index.html
+admin.html
 styles.css
 app.js
 README.md

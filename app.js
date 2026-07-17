@@ -111,28 +111,32 @@ function bindEvents() {
     button.addEventListener("click", () => activateTab(button.dataset.tab));
   });
 
-  elements.adminToggleButton.addEventListener("click", () => elements.adminPanel.classList.remove("hidden"));
-  elements.closeAdminButton.addEventListener("click", () => elements.adminPanel.classList.add("hidden"));
-  elements.refreshButton.addEventListener("click", render);
-  elements.assignmentSystemSelect.addEventListener("change", () => {
+  on(elements.refreshButton, "click", render);
+  on(elements.assignmentSystemSelect, "change", () => {
     selectedAssigneeId = null;
     renderClockAndAssignment();
   });
-  elements.markAssignedButton.addEventListener("click", markSelectedAssigned);
-  elements.addUserForm.addEventListener("submit", addUser);
-  elements.addScheduleForm.addEventListener("submit", addSchedule);
-  elements.shiftTemplateSelect.addEventListener("change", applyShiftTemplate);
-  elements.scheduleStartInput.addEventListener("input", () => elements.shiftTemplateSelect.value = "custom");
-  elements.scheduleEndInput.addEventListener("input", () => elements.shiftTemplateSelect.value = "custom");
-  elements.timelineUserSelect.addEventListener("change", renderTimelineTools);
-  elements.timelineDateInput.addEventListener("change", renderTimelineTools);
-  elements.timelineCanvas.addEventListener("click", prefillSlotFromTimeline);
-  elements.addSlotForm.addEventListener("submit", addTimelineSlot);
-  elements.addSystemForm.addEventListener("submit", addSystem);
-  elements.addHolidayForm.addEventListener("submit", addHoliday);
-  elements.exportButton.addEventListener("click", exportData);
-  elements.importInput.addEventListener("change", importData);
-  elements.resetButton.addEventListener("click", resetData);
+  on(elements.markAssignedButton, "click", markSelectedAssigned);
+  on(elements.addUserForm, "submit", addUser);
+  on(elements.addScheduleForm, "submit", addSchedule);
+  on(elements.shiftTemplateSelect, "change", applyShiftTemplate);
+  on(elements.scheduleStartInput, "input", () => elements.shiftTemplateSelect.value = "custom");
+  on(elements.scheduleEndInput, "input", () => elements.shiftTemplateSelect.value = "custom");
+  on(elements.timelineUserSelect, "change", renderTimelineTools);
+  on(elements.timelineDateInput, "change", renderTimelineTools);
+  on(elements.timelineCanvas, "click", prefillSlotFromTimeline);
+  on(elements.addSlotForm, "submit", addTimelineSlot);
+  on(elements.addSystemForm, "submit", addSystem);
+  on(elements.addHolidayForm, "submit", addHoliday);
+  on(elements.exportButton, "click", exportData);
+  on(elements.importInput, "change", importData);
+  on(elements.resetButton, "click", resetData);
+}
+
+function on(element, eventName, handler) {
+  if (element) {
+    element.addEventListener(eventName, handler);
+  }
 }
 
 function activateTab(tabName) {
@@ -162,7 +166,13 @@ function render() {
 
 function renderClockAndAssignment() {
   const easternNow = getEasternNow();
-  elements.currentEtTime.textContent = `${easternNow.day} ${easternNow.date} · ${easternNow.time}`;
+  if (elements.currentEtTime) {
+    elements.currentEtTime.textContent = `${easternNow.day} ${easternNow.date} · ${easternNow.time}`;
+  }
+
+  if (!elements.assignmentSystemSelect) {
+    return;
+  }
 
   const queueState = getQueueState(elements.assignmentSystemSelect.value, easternNow);
   if (!queueState.rows.some((row) => row.user.id === selectedAssigneeId && row.selectable)) {
@@ -175,6 +185,10 @@ function renderClockAndAssignment() {
 }
 
 function renderSystemSelect() {
+  if (!elements.assignmentSystemSelect) {
+    return;
+  }
+
   const selectedValue = elements.assignmentSystemSelect.value;
   elements.assignmentSystemSelect.innerHTML = "";
 
@@ -197,6 +211,10 @@ function renderUserSelectors() {
 }
 
 function fillUserSelect(select, includeAllUsers = false) {
+  if (!select) {
+    return;
+  }
+
   const selectedValue = select.value;
   select.innerHTML = "";
 
@@ -220,6 +238,10 @@ function fillUserSelect(select, includeAllUsers = false) {
 }
 
 function renderSuggestion(queueState) {
+  if (!elements.suggestionCard || !elements.markAssignedButton || !elements.selectedAssigneeText) {
+    return;
+  }
+
   if (!queueState.system) {
     elements.suggestionCard.innerHTML = `<span class="suggestion-name">No system selected</span><span class="suggestion-meta">Add a system/app from Admin tools.</span>`;
     elements.markAssignedButton.disabled = true;
@@ -246,6 +268,10 @@ function renderSuggestion(queueState) {
 }
 
 function renderQueue(queueState) {
+  if (!elements.queueList) {
+    return;
+  }
+
   const rows = queueState.rows.map((row, index) => {
     const selectedClass = row.user.id === selectedAssigneeId ? " selected" : "";
     const disabled = row.selectable ? "" : "disabled";
@@ -271,6 +297,10 @@ function renderQueue(queueState) {
 }
 
 function renderAssignmentLog() {
+  if (!elements.assignmentLog) {
+    return;
+  }
+
   const rows = data.assignmentLog.slice(-8).reverse().map((entry) => {
     const assignedAt = new Date(entry.assignedAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
     return `
@@ -288,6 +318,10 @@ function renderAssignmentLog() {
 }
 
 function renderUsers() {
+  if (!elements.usersList) {
+    return;
+  }
+
   const rows = data.users.map((user) => {
     const scheduleCount = user.schedules.length;
     const coverageCount = data.systems.filter((system) => system.primaryUserIds.includes(user.id)).length;
@@ -312,6 +346,10 @@ function renderUsers() {
 }
 
 function renderDayCheckboxes() {
+  if (!elements.dayCheckboxes) {
+    return;
+  }
+
   elements.dayCheckboxes.innerHTML = DAYS.map((day) => `
     <label class="check-row">
       <input type="checkbox" value="${day}" ${["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].includes(day) ? "checked" : ""}>
@@ -321,6 +359,10 @@ function renderDayCheckboxes() {
 }
 
 function renderSchedules() {
+  if (!elements.scheduleList) {
+    return;
+  }
+
   const rows = data.users.flatMap((user) => {
     return user.schedules.map((schedule) => {
       return `
@@ -342,11 +384,19 @@ function renderSchedules() {
 }
 
 function renderTimelineTools() {
+  if (!elements.timelineCanvas && !elements.slotsList) {
+    return;
+  }
+
   renderTimeline();
   renderSlots();
 }
 
 function renderTimeline() {
+  if (!elements.timelineCanvas || !elements.timelineUserSelect || !elements.timelineDateInput) {
+    return;
+  }
+
   const user = data.users.find((item) => item.id === elements.timelineUserSelect.value);
   const date = elements.timelineDateInput.value || getEasternNow().date;
   if (!user) {
@@ -374,6 +424,10 @@ function renderTimeline() {
 }
 
 function renderSlots() {
+  if (!elements.slotsList) {
+    return;
+  }
+
   const rows = data.exceptions
     .slice()
     .sort((left, right) => `${left.date} ${left.start}`.localeCompare(`${right.date} ${right.start}`))
@@ -397,6 +451,10 @@ function renderSlots() {
 }
 
 function renderSystems() {
+  if (!elements.systemsList) {
+    return;
+  }
+
   const rows = data.systems.map((system) => {
     const assignedRows = system.primaryUserIds.map((userId, index) => {
       const user = data.users.find((item) => item.id === userId);
@@ -452,6 +510,10 @@ function renderSystems() {
 }
 
 function renderHolidays() {
+  if (!elements.holidaysList) {
+    return;
+  }
+
   const rows = data.holidays
     .slice()
     .sort((left, right) => left.date.localeCompare(right.date))
@@ -477,6 +539,10 @@ function renderHolidays() {
 }
 
 function renderDataPreview() {
+  if (!elements.dataPreview) {
+    return;
+  }
+
   elements.dataPreview.value = JSON.stringify(data, null, 2);
 }
 
@@ -970,8 +1036,13 @@ function normalizeData() {
 
 function setDefaultDates() {
   const today = getEasternNow().date;
-  elements.timelineDateInput.value ||= today;
-  elements.holidayDateInput.value ||= today;
+  if (elements.timelineDateInput) {
+    elements.timelineDateInput.value ||= today;
+  }
+
+  if (elements.holidayDateInput) {
+    elements.holidayDateInput.value ||= today;
+  }
 }
 
 function timelineBlock(start, end, className, label) {
