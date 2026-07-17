@@ -32,15 +32,21 @@
         </div>
 
         <div class="tabs" role="tablist" aria-label="Admin sections">
-          <button class="tab-button active" type="button" data-tab="users">Users</button>
-          <button class="tab-button" type="button" data-tab="schedules">Schedules</button>
-          <button class="tab-button" type="button" data-tab="shifts">Shift presets</button>
-          <button class="tab-button" type="button" data-tab="systems">Systems / apps</button>
+          <button class="tab-button active" type="button" data-tab="schedules">Schedules</button>
           <button class="tab-button" type="button" data-tab="holidays">Holidays</button>
-          <button class="tab-button" type="button" data-tab="data">Data</button>
+          <label class="tab-select-label">
+            <span class="sr-only">Other admin sections</span>
+            <select id="otherAdminSelect" class="tab-select" aria-label="Other admin sections">
+              <option value="">Other…</option>
+              <option value="users">Users</option>
+              <option value="shifts">Shift presets</option>
+              <option value="systems">Systems / apps and mappings</option>
+              <option value="data">Data / backup</option>
+            </select>
+          </label>
         </div>
 
-        <section id="usersTab" class="tab-panel active">
+        <section id="usersTab" class="tab-panel">
           <form id="addUserForm" class="inline-form">
             <label class="field">
               <span>User name</span>
@@ -51,7 +57,7 @@
           <div id="usersList" class="stack-list"></div>
         </section>
 
-        <section id="schedulesTab" class="tab-panel">
+        <section id="schedulesTab" class="tab-panel active">
           <div class="admin-grid">
             <form id="addScheduleForm" class="schedule-form card-form">
               <h3>Add schedule</h3>

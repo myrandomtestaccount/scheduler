@@ -59,6 +59,14 @@ button:disabled {
   display: none !important;
 }
 
+.sr-only {
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+}
+
 .hero {
   display: flex;
   gap: 1.5rem;
@@ -466,13 +474,27 @@ fieldset {
   margin-bottom: 1rem;
 }
 
-.tab-button {
+.tab-button,
+.tab-select {
   background: #f4f6fb;
+  border: 0;
+  border-radius: 12px;
   color: var(--muted);
+  font-weight: 800;
   padding: 0.65rem 0.8rem;
 }
 
-.tab-button.active {
+.tab-select-label {
+  display: inline-flex;
+}
+
+.tab-select {
+  cursor: pointer;
+  width: auto;
+}
+
+.tab-button.active,
+.tab-select.active {
   background: var(--ink);
   color: #fff;
 }

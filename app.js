@@ -52,9 +52,11 @@ const defaultData = {
 
 let data = loadData();
 let selectedAssigneeId = null;
+const OTHER_ADMIN_TABS = ["users", "shifts", "systems", "data"];
 
 const elements = {
   currentEtTime: document.querySelector("#currentEtTime"),
+  otherAdminSelect: document.querySelector("#otherAdminSelect"),
   adminToggleButton: document.querySelector("#adminToggleButton"),
   adminPanel: document.querySelector("#adminPanel"),
   closeAdminButton: document.querySelector("#closeAdminButton"),
@@ -115,6 +117,12 @@ function bindEvents() {
     button.addEventListener("click", () => activateTab(button.dataset.tab));
   });
 
+  on(elements.otherAdminSelect, "change", () => {
+    if (elements.otherAdminSelect.value) {
+      activateTab(elements.otherAdminSelect.value);
+    }
+  });
+
   on(elements.assignmentSystemSelect, "change", () => {
     selectedAssigneeId = null;
     renderClockAndAssignment();
@@ -148,6 +156,12 @@ function activateTab(tabName) {
   document.querySelectorAll(".tab-button").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tabName);
   });
+
+  if (elements.otherAdminSelect) {
+    const isOtherTab = OTHER_ADMIN_TABS.includes(tabName);
+    elements.otherAdminSelect.value = isOtherTab ? tabName : "";
+    elements.otherAdminSelect.classList.toggle("active", isOtherTab);
+  }
 
   document.querySelectorAll(".tab-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.id === `${tabName}Tab`);
