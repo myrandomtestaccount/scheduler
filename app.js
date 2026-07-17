@@ -482,9 +482,7 @@ function renderTimeline() {
 }
 
 function renderDayScheduleGraph(date) {
-  const day = getDayNameFromDate(date);
-  const rows = data.users.map((user) => {
-    const graphBlocks = getGraphBlocksForUser(user, date, day);
+  const rows = getSortedGraphUserRowsForDate(date).map(({ user, graphBlocks }) => {
     const coveredScheduleIds = new Set(
       graphBlocks
         .filter((block) => isScheduleCovered(block, graphBlocks))
@@ -527,7 +525,7 @@ function renderWeekScheduleGraph(date) {
     </div>
   `).join("");
 
-  const rows = data.users.map((user) => {
+  const rows = getSortedGraphUserRowsForWeek(weekDates).map(({ user }) => {
     const cells = weekDates.map((weekDate) => {
       const day = getDayNameFromDate(weekDate);
       const blocks = getGraphBlocksForUser(user, weekDate, day)
@@ -573,6 +571,7 @@ function getGraphBlocksForUser(user, date, day) {
       userId: user.id,
       start: window.start,
       end: window.end,
+      priority: window.priority,
       label: window.source === "extra" ? "Extra" : "Schedule"
     }));
 
@@ -588,6 +587,70 @@ function getGraphBlocksForUser(user, date, day) {
     }));
 
   return scheduleBlocks.concat(breakBlocks).sort((left, right) => toMinutes(left.start) - toMinutes(right.start));
+}
+
+function getSortedGraphUserRowsForDate(date) {
+  const day = getDayNameFromDate(date);
+  return data.users
+    .map((user, index) => {
+      const graphBlocks = getGraphBlocksForUser(user, date, day);
+      return {
+        user,
+        index,
+        graphBlocks,
+        sortKey: getGraphSortKey(graphBlocks)
+      };
+    })
+    .sort(compareGraphUserRows);
+}
+
+function getSortedGraphUserRowsForWeek(weekDates) {
+  return data.users
+    .map((user, index) => ({
+      user,
+      index,
+      sortKey: weekDates
+        .map((weekDate) => getGraphSortKey(getGraphBlocksForUser(user, weekDate, getDayNameFromDate(weekDate))))
+        .sort(compareGraphSortKeys)[0] || emptyGraphSortKey()
+    }))
+    .sort(compareGraphUserRows);
+}
+
+function getGraphSortKey(blocks) {
+  const coverageBlocks = blocks.filter((block) => block.type === "schedule" || block.type === "extra");
+  if (coverageBlocks.length === 0) {
+    return emptyGraphSortKey();
+  }
+
+  return coverageBlocks
+    .map((block) => ({
+      start: toMinutes(block.start),
+      priority: Number(block.priority || Number.MAX_SAFE_INTEGER)
+    }))
+    .sort(compareGraphSortKeys)[0];
+}
+
+function emptyGraphSortKey() {
+  return {
+    start: Number.POSITIVE_INFINITY,
+    priority: Number.POSITIVE_INFINITY
+  };
+}
+
+function compareGraphUserRows(left, right) {
+  return compareGraphSortKeys(left.sortKey, right.sortKey) || left.index - right.index;
+}
+
+function compareGraphSortKeys(left, right) {
+  if (left.start !== right.start) {
+    return left.start < right.start ? -1 : 1;
+  }
+
+  if (left.priority !== right.priority) {
+    return left.priority < right.priority ? -1 : 1;
+  }
+
+  return 0;
 }
 
 function isScheduleCovered(block, blocks) {
@@ -1202,11 +1265,11 @@ function getUserStatus(user, easternNow) {
 function getScheduleWindowsForDate(user, date, day) {
   const scheduleWindows = user.schedules
     .filter((schedule) => schedule.days.includes(day))
-    .map((schedule) => ({ id: schedule.id, source: "schedule", start: schedule.start, end: schedule.end }));
+    .map((schedule) => ({ id: schedule.id, source: "schedule", start: schedule.start, end: schedule.end, priority: Number(schedule.priority || 1) }));
 
   const extraWindows = data.exceptions
     .filter((slot) => slot.userId === user.id && slot.date === date && slot.type === "extra")
-    .map((slot) => ({ id: slot.id, source: "extra", start: slot.start, end: slot.end }));
+    .map((slot) => ({ id: slot.id, source: "extra", start: slot.start, end: slot.end, priority: Number.MAX_SAFE_INTEGER }));
 
   return scheduleWindows
     .concat(extraWindows)
