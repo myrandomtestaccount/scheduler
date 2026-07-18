@@ -18,8 +18,11 @@ Open `admin.html` for admin tools.
 - SMEs who are scheduled later today are grayed out with their login time and can still be picked manually.
 - SMEs who are not scheduled, done for the day, or on holiday are disabled.
 - Mark a selected SME assigned and advance the queue.
+- See today’s ticket ownership ranking on the main page.
 - Admin tools live on a separate `admin.html` page.
 - Admins can add/remove users, systems/apps, schedules, breaks, extra slots, and holidays.
+- Admins can choose an assignment recommendation style: schedule-first, balanced, or app expertise first.
+- Admin setup sections are locked by default; unlock before editing users, holidays, shift presets, systems/apps, assignment rules, or data backups.
 - Admins can define what shift presets like `Early`, `Regular`, and `Late` mean.
 - Shift presets only save time; any user can still have a custom shift on any day.
 - Schedules support different shifts for the same user on different days.
@@ -51,6 +54,7 @@ Admin sections:
 
 - `Users`: add/remove team members.
 - `Schedules`: add weekly schedules, click the all-user graph to prefill user/day/time, add breaks, add extra coverage slots, and review readable user-by-user schedules.
+- `Assignment rules`: choose how recommendations are sorted. The default is schedule-first.
 - `Shift presets`: define reusable shift names and times.
 - `Systems / apps`: add systems and assign/reorder primary SMEs.
 - `Holidays`: add user-specific or all-team holidays.
@@ -60,7 +64,7 @@ Admin sections:
 
 All schedule times are interpreted in `America/New_York` time. The UI labels this as Eastern Time because the actual offset changes between EST and EDT during the year.
 
-Lower priority numbers stay available for future sorting behavior. The current primary-user queue is controlled by the per-system SME order.
+Recommendation sorting can use schedule start time, per-system SME order, total tickets assigned today, and current same-user assignment streak.
 
 ## GitHub
 

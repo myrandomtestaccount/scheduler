@@ -38,6 +38,7 @@
             <span class="sr-only">Other admin sections</span>
             <select id="otherAdminSelect" class="tab-select" aria-label="Other admin sections">
               <option value="">Other…</option>
+              <option value="rules">Assignment rules</option>
               <option value="users">Users</option>
               <option value="shifts">Shift presets</option>
               <option value="systems">Systems / apps and mappings</option>
@@ -46,7 +47,7 @@
           </label>
         </div>
 
-        <section id="usersTab" class="tab-panel">
+        <section id="usersTab" class="tab-panel" data-lockable-admin-tab="users">
           <form id="addUserForm" class="inline-form">
             <label class="field">
               <span>User name</span>
@@ -158,7 +159,23 @@
           </div>
         </section>
 
-        <section id="shiftsTab" class="tab-panel">
+        <section id="rulesTab" class="tab-panel" data-lockable-admin-tab="rules">
+          <form id="assignmentRulesForm" class="card-form">
+            <div>
+              <p class="eyebrow">Assignment policy</p>
+              <h3>Who should be recommended first?</h3>
+              <p class="help-text">Default is schedule-first. Change this only if the team wants fairness or app expertise to lead the recommendation.</p>
+            </div>
+            <label class="field">
+              <span>Recommendation style</span>
+              <select id="assignmentPolicySelect"></select>
+            </label>
+            <div id="assignmentPolicyHelp" class="policy-help"></div>
+            <button class="primary-button" type="submit">Save assignment rules</button>
+          </form>
+        </section>
+
+        <section id="shiftsTab" class="tab-panel" data-lockable-admin-tab="shifts">
           <form id="addShiftForm" class="inline-form">
             <label class="field">
               <span>Preset name</span>
@@ -178,7 +195,7 @@
           <div id="shiftsList" class="stack-list"></div>
         </section>
 
-        <section id="systemsTab" class="tab-panel">
+        <section id="systemsTab" class="tab-panel" data-lockable-admin-tab="systems">
           <form id="addSystemForm" class="inline-form">
             <label class="field">
               <span>System / app name</span>
@@ -190,7 +207,7 @@
           <div id="systemsList" class="stack-list"></div>
         </section>
 
-        <section id="holidaysTab" class="tab-panel">
+        <section id="holidaysTab" class="tab-panel" data-lockable-admin-tab="holidays">
           <form id="addHolidayForm" class="inline-form">
             <label class="field">
               <span>User</span>
@@ -210,9 +227,9 @@
           <div id="holidaysList" class="stack-list"></div>
         </section>
 
-        <section id="dataTab" class="tab-panel">
+        <section id="dataTab" class="tab-panel" data-lockable-admin-tab="data">
           <div class="button-row">
-            <button id="exportButton" class="primary-button" type="button">Export JSON backup</button>
+            <button id="exportButton" class="primary-button" type="button" data-lock-exempt>Export JSON backup</button>
             <label class="file-button">
               Import JSON backup
               <input id="importInput" type="file" accept="application/json">
@@ -224,6 +241,11 @@
         </section>
       </section>
     </main>
+
+    <div id="saveToast" class="save-toast" role="status" aria-live="polite" aria-hidden="true">
+      <span class="save-toast-icon">✓</span>
+      <span id="saveToastText">Saved</span>
+    </div>
 
     <script src="app.js"></script>
   </body>

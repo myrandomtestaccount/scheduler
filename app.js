@@ -12,6 +12,28 @@ const DEFAULT_SHIFT_TEMPLATES = [
   { id: "late", name: "Late shift", start: "11:00", end: "19:00" }
 ];
 
+const DEFAULT_ASSIGNMENT_RULES = { preset: "schedule-first" };
+const ASSIGNMENT_RULE_PRESETS = [
+  {
+    id: "schedule-first",
+    name: "Schedule first",
+    summary: "Earliest scheduled start wins first, then app/system priority, then fairness counters.",
+    rules: ["schedule", "systemPriority", "dailyTickets", "consecutiveTickets"]
+  },
+  {
+    id: "balanced",
+    name: "Balanced",
+    summary: "Avoids repeatedly assigning the same person before using app/system priority and schedule.",
+    rules: ["consecutiveTickets", "dailyTickets", "systemPriority", "schedule"]
+  },
+  {
+    id: "expertise-first",
+    name: "App expertise first",
+    summary: "Uses the system/app SME order first, then fairness counters, then schedule.",
+    rules: ["systemPriority", "consecutiveTickets", "dailyTickets", "schedule"]
+  }
+];
+
 const defaultData = {
   users: [
     {
@@ -45,6 +67,7 @@ const defaultData = {
     "internal-api": 0
   },
   shiftTemplates: DEFAULT_SHIFT_TEMPLATES,
+  assignmentRules: DEFAULT_ASSIGNMENT_RULES,
   exceptions: [],
   holidays: [],
   assignmentLog: []
@@ -52,11 +75,15 @@ const defaultData = {
 
 let data = loadData();
 let selectedAssigneeId = null;
-const OTHER_ADMIN_TABS = ["users", "shifts", "systems", "data"];
+const OTHER_ADMIN_TABS = ["rules", "users", "shifts", "systems", "data"];
+const unlockedAdminTabs = new Set();
+let saveToastTimer = null;
 
 const elements = {
   currentEtTime: document.querySelector("#currentEtTime"),
   otherAdminSelect: document.querySelector("#otherAdminSelect"),
+  saveToast: document.querySelector("#saveToast"),
+  saveToastText: document.querySelector("#saveToastText"),
   adminToggleButton: document.querySelector("#adminToggleButton"),
   adminPanel: document.querySelector("#adminPanel"),
   closeAdminButton: document.querySelector("#closeAdminButton"),
@@ -65,6 +92,7 @@ const elements = {
   markAssignedButton: document.querySelector("#markAssignedButton"),
   selectedAssigneeText: document.querySelector("#selectedAssigneeText"),
   queueList: document.querySelector("#queueList"),
+  dailyRankingsList: document.querySelector("#dailyRankingsList"),
   assignmentLog: document.querySelector("#assignmentLog"),
   addUserForm: document.querySelector("#addUserForm"),
   userNameInput: document.querySelector("#userNameInput"),
@@ -81,6 +109,9 @@ const elements = {
   shiftStartInput: document.querySelector("#shiftStartInput"),
   shiftEndInput: document.querySelector("#shiftEndInput"),
   shiftsList: document.querySelector("#shiftsList"),
+  assignmentRulesForm: document.querySelector("#assignmentRulesForm"),
+  assignmentPolicySelect: document.querySelector("#assignmentPolicySelect"),
+  assignmentPolicyHelp: document.querySelector("#assignmentPolicyHelp"),
   scheduleViewSelect: document.querySelector("#scheduleViewSelect"),
   graphDateLabel: document.querySelector("#graphDateLabel"),
   graphDateHelp: document.querySelector("#graphDateHelp"),
@@ -120,6 +151,10 @@ function bindEvents() {
     button.addEventListener("click", () => activateTab(button.dataset.tab));
   });
 
+  document.querySelectorAll("[data-lockable-admin-tab]").forEach((panel) => {
+    panel.addEventListener("click", handleAdminLockAction);
+  });
+
   on(elements.otherAdminSelect, "change", () => {
     if (elements.otherAdminSelect.value) {
       activateTab(elements.otherAdminSelect.value);
@@ -133,6 +168,8 @@ function bindEvents() {
   on(elements.markAssignedButton, "click", markSelectedAssigned);
   on(elements.addUserForm, "submit", addUser);
   on(elements.addScheduleForm, "submit", addSchedule);
+  on(elements.assignmentRulesForm, "submit", saveAssignmentRules);
+  on(elements.assignmentPolicySelect, "change", renderAssignmentPolicyHelp);
   on(elements.addShiftForm, "submit", addShiftTemplate);
   on(elements.shiftTemplateSelect, "change", applyShiftTemplate);
   on(elements.scheduleStartInput, "input", () => elements.shiftTemplateSelect.value = "custom");
@@ -169,6 +206,8 @@ function activateTab(tabName) {
   document.querySelectorAll(".tab-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.id === `${tabName}Tab`);
   });
+
+  renderAdminLocks();
 }
 
 function render() {
@@ -178,6 +217,7 @@ function render() {
   renderSystemSelect();
   renderUserSelectors();
   renderShiftTemplateSelect();
+  renderAssignmentRules();
   renderShifts();
   renderUsers();
   renderSystems();
@@ -185,6 +225,7 @@ function render() {
   renderTimelineTools();
   renderDataPreview();
   renderClockAndAssignment();
+  renderAdminLocks();
 }
 
 function renderClockAndAssignment() {
@@ -204,6 +245,7 @@ function renderClockAndAssignment() {
 
   renderSuggestion(queueState);
   renderQueue(queueState);
+  renderDailyRankings(easternNow.date);
   renderAssignmentLog();
 }
 
@@ -320,6 +362,139 @@ function renderShifts() {
   });
 }
 
+function renderAssignmentRules() {
+  if (!elements.assignmentPolicySelect) {
+    return;
+  }
+
+  const selectedValue = data.assignmentRules?.preset || DEFAULT_ASSIGNMENT_RULES.preset;
+  elements.assignmentPolicySelect.innerHTML = ASSIGNMENT_RULE_PRESETS.map((preset) => (
+    `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.name)}</option>`
+  )).join("");
+  elements.assignmentPolicySelect.value = getAssignmentRulePreset(selectedValue).id;
+  renderAssignmentPolicyHelp();
+}
+
+function renderAssignmentPolicyHelp() {
+  if (!elements.assignmentPolicyHelp || !elements.assignmentPolicySelect) {
+    return;
+  }
+
+  const preset = getAssignmentRulePreset(elements.assignmentPolicySelect.value);
+  elements.assignmentPolicyHelp.innerHTML = `
+    <div class="policy-summary">${escapeHtml(preset.summary)}</div>
+    <ol>
+      ${preset.rules.map((rule) => `<li>${escapeHtml(getAssignmentRuleLabel(rule))}</li>`).join("")}
+    </ol>
+  `;
+}
+
+function renderAdminLocks() {
+  document.querySelectorAll("[data-lockable-admin-tab]").forEach((panel) => {
+    const tabName = panel.dataset.lockableAdminTab;
+    const unlocked = unlockedAdminTabs.has(tabName);
+    let lockBar = panel.querySelector(".admin-lock-bar");
+    if (!lockBar) {
+      lockBar = document.createElement("div");
+      lockBar.className = "admin-lock-bar";
+      panel.prepend(lockBar);
+    }
+
+    lockBar.innerHTML = `
+      <div>
+        <strong>${unlocked ? "Editing unlocked" : "Editing locked"}</strong>
+        <p class="help-text">${unlocked ? "Make your changes, then use the save/add/remove button." : "Unlock before changing this setup section."}</p>
+      </div>
+      <button class="${unlocked ? "secondary-button" : "primary-button"}" type="button" data-lock-action="${unlocked ? "lock" : "unlock"}" data-tab="${escapeHtml(tabName)}">
+        ${unlocked ? "Lock" : "Unlock changes"}
+      </button>
+    `;
+
+    panel.classList.toggle("is-locked", !unlocked);
+    panel.querySelectorAll("input, select, textarea, button").forEach((control) => {
+      if (control.closest(".admin-lock-bar")) {
+        control.disabled = false;
+        return;
+      }
+
+      if (control.matches("[data-lock-exempt]")) {
+        control.disabled = false;
+        return;
+      }
+
+      control.disabled = !unlocked;
+    });
+  });
+}
+
+function handleAdminLockAction(event) {
+  const button = event.target.closest("[data-lock-action]");
+  if (!button) {
+    return;
+  }
+
+  const tabName = button.dataset.tab;
+  if (button.dataset.lockAction === "unlock") {
+    unlockedAdminTabs.add(tabName);
+  } else {
+    unlockedAdminTabs.delete(tabName);
+  }
+
+  renderAdminLocks();
+}
+
+function isAdminTabUnlocked(tabName) {
+  return !document.querySelector(`[data-lockable-admin-tab="${cssEscape(tabName)}"]`) || unlockedAdminTabs.has(tabName);
+}
+
+function completeAdminSave(message = "Saved.", tabName = null) {
+  if (tabName) {
+    unlockedAdminTabs.delete(tabName);
+  }
+
+  render();
+  showSaveToast(message);
+}
+
+function showSaveToast(message) {
+  if (!elements.saveToast || !elements.saveToastText) {
+    return;
+  }
+
+  elements.saveToastText.textContent = message;
+  elements.saveToast.setAttribute("aria-hidden", "false");
+  elements.saveToast.classList.add("show");
+  window.clearTimeout(saveToastTimer);
+  saveToastTimer = window.setTimeout(() => {
+    elements.saveToast.classList.remove("show");
+    elements.saveToast.setAttribute("aria-hidden", "true");
+  }, 2600);
+}
+
+function getAssignmentRulePreset(presetId) {
+  return ASSIGNMENT_RULE_PRESETS.find((preset) => preset.id === presetId) || ASSIGNMENT_RULE_PRESETS[0];
+}
+
+function getAssignmentRuleLabel(rule) {
+  if (rule === "schedule") {
+    return "Schedule start time";
+  }
+
+  if (rule === "systemPriority") {
+    return "System/app SME priority";
+  }
+
+  if (rule === "dailyTickets") {
+    return "Fewest tickets assigned today";
+  }
+
+  if (rule === "consecutiveTickets") {
+    return "Fewest tickets assigned in a row";
+  }
+
+  return rule;
+}
+
 function renderSuggestion(queueState) {
   if (!elements.suggestionCard || !elements.markAssignedButton || !elements.selectedAssigneeText) {
     return;
@@ -358,6 +533,7 @@ function renderQueue(queueState) {
   const rows = queueState.rows.map((row, index) => {
     const selectedClass = row.user.id === selectedAssigneeId ? " selected" : "";
     const disabled = row.selectable ? "" : "disabled";
+    const metricText = `${row.dailyTickets} today · ${row.consecutiveTickets} in a row · System #${row.systemPriority + 1}`;
     return `
       <button class="queue-card ${row.status}${selectedClass}" type="button" data-user-id="${escapeHtml(row.user.id)}" ${disabled}>
         <span class="queue-card-header">
@@ -366,6 +542,7 @@ function renderQueue(queueState) {
         </span>
         <span class="queue-name">${escapeHtml(row.user.name)}</span>
         <span class="meta">${escapeHtml(row.message)}</span>
+        <span class="queue-metrics">${escapeHtml(metricText)}</span>
       </button>
     `;
   }).join("");
@@ -377,6 +554,23 @@ function renderQueue(queueState) {
       renderClockAndAssignment();
     });
   });
+}
+
+function renderDailyRankings(date) {
+  if (!elements.dailyRankingsList) {
+    return;
+  }
+
+  const rankings = getDailyTicketRankings(date);
+  const rows = rankings.map((entry, index) => `
+    <div class="ranking-item">
+      <span class="rank-number">#${index + 1}</span>
+      <span class="rank-name">${escapeHtml(entry.user.name)}</span>
+      <span class="ranking-count">${entry.count} ticket${entry.count === 1 ? "" : "s"}</span>
+    </div>
+  `).join("");
+
+  elements.dailyRankingsList.innerHTML = rows || emptyState("Add users to see ticket ownership.");
 }
 
 function renderAssignmentLog() {
@@ -786,8 +980,24 @@ function renderDataPreview() {
   elements.dataPreview.value = JSON.stringify(data, null, 2);
 }
 
+function saveAssignmentRules(event) {
+  event.preventDefault();
+  if (!isAdminTabUnlocked("rules")) {
+    return;
+  }
+
+  data.assignmentRules = {
+    preset: getAssignmentRulePreset(elements.assignmentPolicySelect.value).id
+  };
+  completeAdminSave("Assignment rules saved.", "rules");
+}
+
 function addShiftTemplate(event) {
   event.preventDefault();
+  if (!isAdminTabUnlocked("shifts")) {
+    return;
+  }
+
   const name = elements.shiftNameInput.value.trim();
   const start = elements.shiftStartInput.value;
   const end = elements.shiftEndInput.value;
@@ -807,10 +1017,14 @@ function addShiftTemplate(event) {
   elements.addShiftForm.reset();
   elements.shiftStartInput.value = "09:00";
   elements.shiftEndInput.value = "17:00";
-  render();
+  completeAdminSave("Shift preset saved.", "shifts");
 }
 
 function updateShiftTemplate(shiftId) {
+  if (!isAdminTabUnlocked("shifts")) {
+    return;
+  }
+
   const row = elements.shiftsList.querySelector(`[data-shift-id="${cssEscape(shiftId)}"]`);
   const template = data.shiftTemplates.find((item) => item.id === shiftId);
   if (!row || !template) {
@@ -829,10 +1043,14 @@ function updateShiftTemplate(shiftId) {
   template.name = name;
   template.start = start;
   template.end = end;
-  render();
+  completeAdminSave("Shift preset saved.", "shifts");
 }
 
 function removeShiftTemplate(shiftId) {
+  if (!isAdminTabUnlocked("shifts")) {
+    return;
+  }
+
   const template = data.shiftTemplates.find((item) => item.id === shiftId);
   if (!template || !window.confirm(`Remove ${template.name}? Existing schedules using it will become custom schedules.`)) {
     return;
@@ -846,11 +1064,15 @@ function removeShiftTemplate(shiftId) {
       }
     });
   });
-  render();
+  completeAdminSave("Shift preset removed.", "shifts");
 }
 
 function addUser(event) {
   event.preventDefault();
+  if (!isAdminTabUnlocked("users")) {
+    return;
+  }
+
   const name = elements.userNameInput.value.trim();
   if (!name) {
     return;
@@ -863,10 +1085,14 @@ function addUser(event) {
   });
 
   elements.addUserForm.reset();
-  render();
+  completeAdminSave("User saved.", "users");
 }
 
 function removeUser(userId) {
+  if (!isAdminTabUnlocked("users")) {
+    return;
+  }
+
   const user = data.users.find((item) => item.id === userId);
   if (!user || !window.confirm(`Remove ${user.name}? This also removes their schedules, breaks, holidays, and coverage.`)) {
     return;
@@ -880,7 +1106,7 @@ function removeUser(userId) {
     clampQueue(system.id);
   });
   selectedAssigneeId = null;
-  render();
+  completeAdminSave("User removed.", "users");
 }
 
 function applyShiftTemplate() {
@@ -921,7 +1147,7 @@ function addSchedule(event) {
     priority: Number(elements.schedulePriorityInput.value)
   });
 
-  render();
+  completeAdminSave("Schedule saved.");
 }
 
 function removeSchedule(userId, scheduleId) {
@@ -931,7 +1157,7 @@ function removeSchedule(userId, scheduleId) {
   }
 
   user.schedules = user.schedules.filter((schedule) => schedule.id !== scheduleId);
-  render();
+  completeAdminSave("Schedule removed.");
 }
 
 function addTimelineSlot(event) {
@@ -963,12 +1189,12 @@ function addTimelineSlot(event) {
   });
 
   elements.slotReasonInput.value = "";
-  render();
+  completeAdminSave("Timeline slot saved.");
 }
 
 function removeTimelineSlot(slotId) {
   data.exceptions = data.exceptions.filter((slot) => slot.id !== slotId);
-  render();
+  completeAdminSave("Timeline slot removed.");
 }
 
 function prefillSlotFromTimeline(event) {
@@ -1056,6 +1282,10 @@ function selectOnlyScheduleDay(day) {
 
 function addSystem(event) {
   event.preventDefault();
+  if (!isAdminTabUnlocked("systems")) {
+    return;
+  }
+
   const name = elements.systemNameInput.value.trim();
   if (!name) {
     return;
@@ -1065,10 +1295,14 @@ function addSystem(event) {
   data.systems.push({ id, name, primaryUserIds: [] });
   data.queues[id] = 0;
   elements.addSystemForm.reset();
-  render();
+  completeAdminSave("System saved.", "systems");
 }
 
 function removeSystem(systemId) {
+  if (!isAdminTabUnlocked("systems")) {
+    return;
+  }
+
   const system = data.systems.find((item) => item.id === systemId);
   if (!system || !window.confirm(`Remove ${system.name}?`)) {
     return;
@@ -1077,10 +1311,14 @@ function removeSystem(systemId) {
   data.systems = data.systems.filter((item) => item.id !== systemId);
   delete data.queues[systemId];
   selectedAssigneeId = null;
-  render();
+  completeAdminSave("System removed.", "systems");
 }
 
 function toggleCoverage(systemId, userId, checked) {
+  if (!isAdminTabUnlocked("systems")) {
+    return;
+  }
+
   const system = data.systems.find((item) => item.id === systemId);
   if (!system) {
     return;
@@ -1096,10 +1334,14 @@ function toggleCoverage(systemId, userId, checked) {
 
   clampQueue(systemId);
   selectedAssigneeId = null;
-  render();
+  completeAdminSave("Coverage mapping saved.", "systems");
 }
 
 function moveCoveredUser(systemId, userId, direction) {
+  if (!isAdminTabUnlocked("systems")) {
+    return;
+  }
+
   const system = data.systems.find((item) => item.id === systemId);
   if (!system) {
     return;
@@ -1114,11 +1356,15 @@ function moveCoveredUser(systemId, userId, direction) {
   [system.primaryUserIds[currentIndex], system.primaryUserIds[nextIndex]] = [system.primaryUserIds[nextIndex], system.primaryUserIds[currentIndex]];
   clampQueue(systemId);
   selectedAssigneeId = null;
-  render();
+  completeAdminSave("System priority saved.", "systems");
 }
 
 function addHoliday(event) {
   event.preventDefault();
+  if (!isAdminTabUnlocked("holidays")) {
+    return;
+  }
+
   if (!elements.holidayDateInput.value) {
     window.alert("Choose a holiday date.");
     return;
@@ -1132,12 +1378,16 @@ function addHoliday(event) {
   });
 
   elements.holidayNameInput.value = "";
-  render();
+  completeAdminSave("Holiday saved.", "holidays");
 }
 
 function removeHoliday(holidayId) {
+  if (!isAdminTabUnlocked("holidays")) {
+    return;
+  }
+
   data.holidays = data.holidays.filter((holiday) => holiday.id !== holidayId);
-  render();
+  completeAdminSave("Holiday removed.", "holidays");
 }
 
 function markSelectedAssigned() {
@@ -1175,21 +1425,122 @@ function getQueueState(systemId, easternNow) {
     return { system: null, rows: [], recommendedRow: null };
   }
 
-  const primaryUsers = system.primaryUserIds
-    .map((userId) => data.users.find((user) => user.id === userId))
-    .filter(Boolean);
+  const rows = system.primaryUserIds.map((userId, systemPriority) => {
+    const user = data.users.find((item) => item.id === userId);
+    if (!user) {
+      return null;
+    }
 
-  const rows = rotate(primaryUsers, getQueueIndex(system)).map((user) => {
     const status = getUserStatus(user, easternNow);
-    return { user, ...status };
-  });
+    const metrics = getAssignmentMetrics(user, systemPriority, easternNow);
+    return { user, ...status, ...metrics };
+  }).filter(Boolean).sort(compareQueueRows);
 
-  const recommendedRow =
-    rows.find((row) => row.status === "available") ||
-    rows.find((row) => row.status === "later") ||
-    null;
+  const recommendedRow = rows.find((row) => row.selectable) || null;
 
   return { system, rows, recommendedRow };
+}
+
+function getAssignmentMetrics(user, systemPriority, easternNow) {
+  const windows = getScheduleWindowsForDate(user, easternNow.date, easternNow.day);
+  const earliestStart = windows.length > 0
+    ? Math.min(...windows.map((window) => toMinutes(window.start)))
+    : Number.POSITIVE_INFINITY;
+
+  return {
+    systemPriority,
+    scheduleStart: earliestStart,
+    dailyTickets: getDailyAssignmentCount(user.id, easternNow.date),
+    consecutiveTickets: getConsecutiveAssignmentCount(user.id, easternNow.date)
+  };
+}
+
+function compareQueueRows(left, right) {
+  const statusDifference = getQueueStatusRank(left) - getQueueStatusRank(right);
+  if (statusDifference !== 0) {
+    return statusDifference;
+  }
+
+  const preset = getAssignmentRulePreset(data.assignmentRules?.preset);
+  for (const rule of preset.rules) {
+    const difference = compareQueueRowsByRule(left, right, rule);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+
+  return left.user.name.localeCompare(right.user.name);
+}
+
+function compareQueueRowsByRule(left, right, rule) {
+  if (rule === "schedule") {
+    return compareFiniteNumbers(left.scheduleStart, right.scheduleStart);
+  }
+
+  if (rule === "systemPriority") {
+    return left.systemPriority - right.systemPriority;
+  }
+
+  if (rule === "dailyTickets") {
+    return left.dailyTickets - right.dailyTickets;
+  }
+
+  if (rule === "consecutiveTickets") {
+    return left.consecutiveTickets - right.consecutiveTickets;
+  }
+
+  return 0;
+}
+
+function getQueueStatusRank(row) {
+  if (row.status === "available") {
+    return 0;
+  }
+
+  if (row.status === "later") {
+    return 1;
+  }
+
+  return 2;
+}
+
+function compareFiniteNumbers(left, right) {
+  if (left === right) {
+    return 0;
+  }
+
+  return left < right ? -1 : 1;
+}
+
+function getDailyTicketRankings(date) {
+  return data.users
+    .map((user) => ({
+      user,
+      count: getDailyAssignmentCount(user.id, date),
+      consecutive: getConsecutiveAssignmentCount(user.id, date)
+    }))
+    .sort((left, right) => right.count - left.count || right.consecutive - left.consecutive || left.user.name.localeCompare(right.user.name));
+}
+
+function getDailyAssignmentCount(userId, date) {
+  return data.assignmentLog.filter((entry) => entry.easternDate === date && entry.userId === userId).length;
+}
+
+function getConsecutiveAssignmentCount(userId, date) {
+  let count = 0;
+  for (const entry of data.assignmentLog.slice().reverse()) {
+    if (entry.easternDate !== date) {
+      continue;
+    }
+
+    if (entry.userId !== userId) {
+      break;
+    }
+
+    count += 1;
+  }
+
+  return count;
 }
 
 function getUserStatus(user, easternNow) {
@@ -1311,6 +1662,11 @@ function exportData() {
 }
 
 function importData(event) {
+  if (!isAdminTabUnlocked("data")) {
+    event.target.value = "";
+    return;
+  }
+
   const [file] = event.target.files;
   if (!file) {
     return;
@@ -1323,7 +1679,7 @@ function importData(event) {
       validateData(imported);
       data = imported;
       selectedAssigneeId = null;
-      render();
+      completeAdminSave("Backup imported.", "data");
     } catch (error) {
       window.alert(`Could not import JSON: ${error.message}`);
     } finally {
@@ -1334,13 +1690,17 @@ function importData(event) {
 }
 
 function resetData() {
+  if (!isAdminTabUnlocked("data")) {
+    return;
+  }
+
   if (!window.confirm("Reset to sample data? This replaces local browser data.")) {
     return;
   }
 
   data = cloneData(defaultData);
   selectedAssigneeId = null;
-  render();
+  completeAdminSave("Sample data restored.", "data");
 }
 
 function loadData() {
@@ -1382,6 +1742,10 @@ function validateData(candidate) {
 
 function normalizeData() {
   data.assignmentLog = Array.isArray(data.assignmentLog) ? data.assignmentLog : [];
+  data.assignmentRules = data.assignmentRules && typeof data.assignmentRules === "object"
+    ? data.assignmentRules
+    : { ...DEFAULT_ASSIGNMENT_RULES };
+  data.assignmentRules.preset = getAssignmentRulePreset(data.assignmentRules.preset).id;
   data.exceptions = Array.isArray(data.exceptions) ? data.exceptions : [];
   data.holidays = Array.isArray(data.holidays) ? data.holidays : [];
   data.shiftTemplates = Array.isArray(data.shiftTemplates) && data.shiftTemplates.length > 0
@@ -1616,14 +1980,6 @@ function clampQueue(systemId) {
   }
 
   data.queues[systemId] = getQueueIndex(system);
-}
-
-function rotate(items, startIndex) {
-  if (items.length === 0) {
-    return [];
-  }
-
-  return items.slice(startIndex).concat(items.slice(0, startIndex));
 }
 
 function inferShiftType(start, end) {
