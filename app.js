@@ -1,10 +1,29 @@
 const STORAGE_KEY = "smeScheduler.data.v1";
+const DEBUG_TIME_STORAGE_KEY = "smeScheduler.debugTime.v1";
+const THEME_STORAGE_KEY = "smeScheduler.theme.v1";
+const DISPLAY_TIMEZONE_STORAGE_KEY = "smeScheduler.displayTimezone.v1";
+const SHARED_STATE_ENDPOINT = "/api/state";
+const SHARED_STATE_REFRESH_MS = 10000;
+const THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const EASTERN_TIME_ZONE = "America/New_York";
 const GLOBAL_HOLIDAY_USER_ID = "__all__";
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const SCHEDULE_DAYS = DAYS.slice(0, 5);
 const TIMELINE_START_MINUTES = 6 * 60;
 const TIMELINE_END_MINUTES = 22 * 60;
 const SLOT_MINUTES = 30;
+const RECENT_ASSIGNMENTS_WINDOW_MS = 24 * 60 * 60 * 1000;
+const SHIFT_ORDER_PRESET_ID = "schedule-first";
+const SHIFT_QUEUE_SYSTEM_ID = "__shift_queue__";
+const SHIFT_QUEUE_SYSTEM_NAME = "Shift queue";
+const INCIDENT_CREATE_URL = "https://www.google.com/";
+const DEV_MODE_TIME_OPTION_ID = "__dev_mode__";
+const DISPLAY_TIMEZONES = [
+  { id: "et", timeZone: EASTERN_TIME_ZONE },
+  { id: "utc", timeZone: "UTC" },
+  { id: "london", timeZone: "Europe/London" },
+  { id: "ist", timeZone: "Asia/Kolkata" }
+];
 
 const DEFAULT_SHIFT_TEMPLATES = [
   { id: "early", name: "Early shift", start: "07:00", end: "15:00" },
@@ -12,27 +31,27 @@ const DEFAULT_SHIFT_TEMPLATES = [
   { id: "late", name: "Late shift", start: "11:00", end: "19:00" }
 ];
 
-const DEFAULT_ASSIGNMENT_RULES = { preset: "schedule-first" };
+const DEFAULT_ASSIGNMENT_RULES = { preset: SHIFT_ORDER_PRESET_ID };
 const ASSIGNMENT_RULE_PRESETS = [
   {
-    id: "schedule-first",
-    name: "Schedule first",
-    summary: "Earliest scheduled start wins first, then app/system priority, then fairness counters.",
-    rules: ["schedule", "systemPriority", "dailyTickets", "consecutiveTickets"]
-  },
-  {
-    id: "balanced",
-    name: "Balanced",
-    summary: "Avoids repeatedly assigning the same person before using app/system priority and schedule.",
-    rules: ["consecutiveTickets", "dailyTickets", "systemPriority", "schedule"]
-  },
-  {
     id: "expertise-first",
-    name: "App expertise first",
-    summary: "Uses the system/app SME order first, then fairness counters, then schedule.",
-    rules: ["systemPriority", "consecutiveTickets", "dailyTickets", "schedule"]
+    name: "SME order",
+    rules: ["schedule", "queuePriority", "teamPriority"]
+  },
+  {
+    id: "schedule-first",
+    name: "Shift order",
+    rules: ["schedule", "lastTicketToday", "teamPriority"]
   }
 ];
+const ALWAYS_ASSIGNMENT_RULES = ["availability"];
+const ASSIGNMENT_RULE_LABELS = {
+  availability: "Availability: who is online now?",
+  schedule: "Schedule: earliest shift start",
+  queuePriority: "SME order: coverage priority",
+  teamPriority: "Team order: escalation hierarchy",
+  lastTicketToday: "Rotation: longest time since last assignment"
+};
 
 const defaultData = {
   users: [
@@ -40,21 +59,21 @@ const defaultData = {
       id: "alice",
       name: "Alice",
       schedules: [
-        { id: "alice-regular", shiftType: "regular", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "09:00", end: "17:00", priority: 1 }
+        { id: "alice-regular", shiftType: "regular", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "09:00", end: "17:00" }
       ]
     },
     {
       id: "ben",
       name: "Ben",
       schedules: [
-        { id: "ben-early", shiftType: "early", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "07:00", end: "15:00", priority: 2 }
+        { id: "ben-early", shiftType: "early", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "07:00", end: "15:00" }
       ]
     },
     {
       id: "casey",
       name: "Casey",
       schedules: [
-        { id: "casey-late", shiftType: "late", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "11:00", end: "19:00", priority: 3 }
+        { id: "casey-late", shiftType: "late", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "11:00", end: "19:00" }
       ]
     }
   ],
@@ -74,52 +93,139 @@ const defaultData = {
 };
 
 let data = loadData();
+let lastPersistedData = cloneData(data);
+let sharedStateAvailable = false;
+let sharedStateRevision = null;
+let sharedStateSaveQueue = Promise.resolve();
+let sharedStateSaveInProgress = false;
+let sharedStateGeneration = 0;
 let selectedAssigneeId = null;
+let initialDevModeRequested = isDevModeRequested();
+let debugTimeOverride = initialDevModeRequested ? loadDebugTimeOverride() : null;
+if (!initialDevModeRequested) {
+  clearDebugTimeOverride();
+}
+let showRecentAssignments = false;
+let showQueueDashboard = false;
+let lastAssignmentId = null;
+let editingAssignmentId = null;
+let editingSchedule = null;
+let selectedAssignmentPolicyId = null;
+let pendingRemoveUserId = null;
+let pendingRemoveShiftId = null;
+let pendingRemoveSchedule = null;
+let pendingRemoveHolidayId = null;
+let shiftAddFormOpen = false;
+let selectedDisplayTimezoneId = loadDisplayTimezone();
+let devModeUnlocked = initialDevModeRequested && Boolean(debugTimeOverride);
+let adminTimeInputsInitialized = false;
+let timelineDrafts = [];
+let timelineDrag = null;
 const OTHER_ADMIN_TABS = ["rules", "users", "shifts", "systems", "data"];
 const unlockedAdminTabs = new Set();
 let saveToastTimer = null;
 
 const elements = {
-  currentEtTime: document.querySelector("#currentEtTime"),
+  displayTimezoneSelect: document.querySelector("#displayTimezoneSelect"),
+  assignmentQueueTitle: document.querySelector("#assignmentQueueTitle"),
+  debugDateInput: document.querySelector("#debugDateInput"),
+  debugTimeInput: document.querySelector("#debugTimeInput"),
+  debugTimeCard: document.querySelector("#debugTimeCard"),
+  applyDebugTimeButton: document.querySelector("#applyDebugTimeButton"),
+  resetDebugTimeButton: document.querySelector("#resetDebugTimeButton"),
+  debugTimeStatus: document.querySelector("#debugTimeStatus"),
+  devModeModal: document.querySelector("#devModeModal"),
+  cancelDevModeButton: document.querySelector("#cancelDevModeButton"),
+  confirmDevModeButton: document.querySelector("#confirmDevModeButton"),
   otherAdminSelect: document.querySelector("#otherAdminSelect"),
   saveToast: document.querySelector("#saveToast"),
   saveToastText: document.querySelector("#saveToastText"),
+  syncStateModal: document.querySelector("#syncStateModal"),
+  syncStateModalTitle: document.querySelector("#syncStateModalTitle"),
+  syncStateModalMessage: document.querySelector("#syncStateModalMessage"),
+  closeSyncStateModalButton: document.querySelector("#closeSyncStateModalButton"),
+  removeUserModal: document.querySelector("#removeUserModal"),
+  removeUserModalName: document.querySelector("#removeUserModalName"),
+  removeUserModalImpact: document.querySelector("#removeUserModalImpact"),
+  cancelRemoveUserButton: document.querySelector("#cancelRemoveUserButton"),
+  confirmRemoveUserButton: document.querySelector("#confirmRemoveUserButton"),
+  removeShiftModal: document.querySelector("#removeShiftModal"),
+  removeShiftModalName: document.querySelector("#removeShiftModalName"),
+  removeShiftModalImpact: document.querySelector("#removeShiftModalImpact"),
+  cancelRemoveShiftButton: document.querySelector("#cancelRemoveShiftButton"),
+  confirmRemoveShiftButton: document.querySelector("#confirmRemoveShiftButton"),
+  removeScheduleModal: document.querySelector("#removeScheduleModal"),
+  removeScheduleModalName: document.querySelector("#removeScheduleModalName"),
+  removeScheduleModalImpact: document.querySelector("#removeScheduleModalImpact"),
+  cancelRemoveScheduleButton: document.querySelector("#cancelRemoveScheduleButton"),
+  removeScheduleDayButton: document.querySelector("#removeScheduleDayButton"),
+  removeScheduleAllButton: document.querySelector("#removeScheduleAllButton"),
+  removeHolidayModal: document.querySelector("#removeHolidayModal"),
+  removeHolidayModalName: document.querySelector("#removeHolidayModalName"),
+  removeHolidayModalImpact: document.querySelector("#removeHolidayModalImpact"),
+  cancelRemoveHolidayButton: document.querySelector("#cancelRemoveHolidayButton"),
+  confirmRemoveHolidayButton: document.querySelector("#confirmRemoveHolidayButton"),
+  backupUnlockModal: document.querySelector("#backupUnlockModal"),
+  cancelBackupUnlockButton: document.querySelector("#cancelBackupUnlockButton"),
+  confirmBackupUnlockButton: document.querySelector("#confirmBackupUnlockButton"),
   adminToggleButton: document.querySelector("#adminToggleButton"),
   adminPanel: document.querySelector("#adminPanel"),
   closeAdminButton: document.querySelector("#closeAdminButton"),
   assignmentSystemSelect: document.querySelector("#assignmentSystemSelect"),
-  suggestionCard: document.querySelector("#suggestionCard"),
   markAssignedButton: document.querySelector("#markAssignedButton"),
-  selectedAssigneeText: document.querySelector("#selectedAssigneeText"),
+  assignmentConfirmation: document.querySelector("#assignmentConfirmation"),
+  queueSection: document.querySelector("#queueSection"),
   queueList: document.querySelector("#queueList"),
   dailyRankingsList: document.querySelector("#dailyRankingsList"),
+  recentAssignmentsPanel: document.querySelector("#recentAssignmentsPanel"),
+  activityPanelSection: document.querySelector("#activityPanelSection"),
+  toggleQueueDashboardButton: document.querySelector("#toggleQueueDashboardButton"),
+  queueDashboardPanel: document.querySelector("#queueDashboardPanel"),
+  queueDashboardList: document.querySelector("#queueDashboardList"),
+  toggleRecentAssignmentsButton: document.querySelector("#toggleRecentAssignmentsButton"),
   assignmentLog: document.querySelector("#assignmentLog"),
   addUserForm: document.querySelector("#addUserForm"),
   userNameInput: document.querySelector("#userNameInput"),
   usersList: document.querySelector("#usersList"),
   addScheduleForm: document.querySelector("#addScheduleForm"),
+  scheduleFormTitle: document.querySelector("#scheduleFormTitle"),
+  scheduleSubmitButton: document.querySelector("#scheduleSubmitButton"),
+  cancelScheduleEditButton: document.querySelector("#cancelScheduleEditButton"),
   scheduleUserSelect: document.querySelector("#scheduleUserSelect"),
   shiftTemplateSelect: document.querySelector("#shiftTemplateSelect"),
   dayCheckboxes: document.querySelector("#dayCheckboxes"),
+  scheduleStartDateInput: document.querySelector("#scheduleStartDateInput"),
+  scheduleEndDateInput: document.querySelector("#scheduleEndDateInput"),
   scheduleStartInput: document.querySelector("#scheduleStartInput"),
   scheduleEndInput: document.querySelector("#scheduleEndInput"),
-  schedulePriorityInput: document.querySelector("#schedulePriorityInput"),
+  showAddShiftButton: document.querySelector("#showAddShiftButton"),
   addShiftForm: document.querySelector("#addShiftForm"),
+  cancelAddShiftButton: document.querySelector("#cancelAddShiftButton"),
   shiftNameInput: document.querySelector("#shiftNameInput"),
   shiftStartInput: document.querySelector("#shiftStartInput"),
   shiftEndInput: document.querySelector("#shiftEndInput"),
   shiftsList: document.querySelector("#shiftsList"),
   assignmentRulesForm: document.querySelector("#assignmentRulesForm"),
-  assignmentPolicySelect: document.querySelector("#assignmentPolicySelect"),
-  assignmentPolicyHelp: document.querySelector("#assignmentPolicyHelp"),
+  assignmentPolicyDescriptions: document.querySelector("#assignmentPolicyDescriptions"),
   scheduleViewSelect: document.querySelector("#scheduleViewSelect"),
   graphDateLabel: document.querySelector("#graphDateLabel"),
-  graphDateHelp: document.querySelector("#graphDateHelp"),
+  scheduleDaysLegend: document.querySelector("#scheduleDaysLegend"),
+  scheduleStartLabel: document.querySelector("#scheduleStartLabel"),
+  scheduleEndLabel: document.querySelector("#scheduleEndLabel"),
+  scheduleGraphTitle: document.querySelector("#scheduleGraphTitle"),
+  slotStartLabel: document.querySelector("#slotStartLabel"),
+  slotEndLabel: document.querySelector("#slotEndLabel"),
+  shiftStartLabel: document.querySelector("#shiftStartLabel"),
+  shiftEndLabel: document.querySelector("#shiftEndLabel"),
   timelineUserSelect: document.querySelector("#timelineUserSelect"),
   timelineDateInput: document.querySelector("#timelineDateInput"),
   timelineCanvas: document.querySelector("#timelineCanvas"),
+  timelineDraftActions: document.querySelector("#timelineDraftActions"),
+  timelineDraftTitle: document.querySelector("#timelineDraftTitle"),
+  timelineDraftMeta: document.querySelector("#timelineDraftMeta"),
+  saveTimelineDraftButton: document.querySelector("#saveTimelineDraftButton"),
+  clearTimelineDraftButton: document.querySelector("#clearTimelineDraftButton"),
   addSlotForm: document.querySelector("#addSlotForm"),
-  slotTypeSelect: document.querySelector("#slotTypeSelect"),
   slotDateInput: document.querySelector("#slotDateInput"),
   slotStartInput: document.querySelector("#slotStartInput"),
   slotEndInput: document.querySelector("#slotEndInput"),
@@ -139,14 +245,26 @@ const elements = {
   dataPreview: document.querySelector("#dataPreview")
 };
 
-document.addEventListener("DOMContentLoaded", () => {
+applyTheme(loadTheme());
+
+document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
   renderDayCheckboxes();
+  await initializeSharedState();
   render();
   window.setInterval(renderClockAndAssignment, 30000);
+  window.setInterval(refreshSharedStateIfIdle, SHARED_STATE_REFRESH_MS);
+  window.addEventListener("focus", refreshSharedStateIfIdle);
 });
 
 function bindEvents() {
+  bindBrowserThemePreference();
+  maybePromptForDevMode();
+
+  document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+    button.addEventListener("click", toggleTheme);
+  });
+
   document.querySelectorAll(".tab-button").forEach((button) => {
     button.addEventListener("click", () => activateTab(button.dataset.tab));
   });
@@ -163,33 +281,186 @@ function bindEvents() {
 
   on(elements.assignmentSystemSelect, "change", () => {
     selectedAssigneeId = null;
+    lastAssignmentId = null;
     renderClockAndAssignment();
   });
+  on(elements.displayTimezoneSelect, "change", changeDisplayTimezone);
+  on(elements.cancelDevModeButton, "click", closeDevModeModal);
+  on(elements.confirmDevModeButton, "click", confirmDevMode);
+  on(elements.devModeModal, "click", (event) => {
+    if (event.target === elements.devModeModal) {
+      closeDevModeModal();
+    }
+  });
+  on(elements.closeSyncStateModalButton, "click", closeSyncStateModal);
+  on(elements.syncStateModal, "click", (event) => {
+    if (event.target === elements.syncStateModal) {
+      closeSyncStateModal();
+    }
+  });
   on(elements.markAssignedButton, "click", markSelectedAssigned);
+  on(elements.applyDebugTimeButton, "click", applyDebugTimeOverride);
+  on(elements.resetDebugTimeButton, "click", resetDebugTimeOverride);
+  on(elements.toggleQueueDashboardButton, "click", toggleQueueDashboard);
+  on(elements.toggleRecentAssignmentsButton, "click", toggleRecentAssignments);
   on(elements.addUserForm, "submit", addUser);
+  on(elements.cancelRemoveUserButton, "click", closeRemoveUserModal);
+  on(elements.confirmRemoveUserButton, "click", confirmRemoveUser);
+  on(elements.removeUserModal, "click", (event) => {
+    if (event.target === elements.removeUserModal) {
+      closeRemoveUserModal();
+    }
+  });
+  on(elements.cancelRemoveShiftButton, "click", closeRemoveShiftModal);
+  on(elements.confirmRemoveShiftButton, "click", confirmRemoveShift);
+  on(elements.removeShiftModal, "click", (event) => {
+    if (event.target === elements.removeShiftModal) {
+      closeRemoveShiftModal();
+    }
+  });
+  on(elements.cancelRemoveScheduleButton, "click", closeRemoveScheduleModal);
+  on(elements.removeScheduleDayButton, "click", confirmRemoveScheduleDay);
+  on(elements.removeScheduleAllButton, "click", confirmRemoveScheduleAll);
+  on(elements.removeScheduleModal, "click", (event) => {
+    if (event.target === elements.removeScheduleModal) {
+      closeRemoveScheduleModal();
+    }
+  });
+  on(elements.cancelRemoveHolidayButton, "click", closeRemoveHolidayModal);
+  on(elements.confirmRemoveHolidayButton, "click", confirmRemoveHoliday);
+  on(elements.removeHolidayModal, "click", (event) => {
+    if (event.target === elements.removeHolidayModal) {
+      closeRemoveHolidayModal();
+    }
+  });
+  on(elements.cancelBackupUnlockButton, "click", closeBackupUnlockModal);
+  on(elements.confirmBackupUnlockButton, "click", confirmBackupUnlock);
+  on(elements.backupUnlockModal, "click", (event) => {
+    if (event.target === elements.backupUnlockModal) {
+      closeBackupUnlockModal();
+    }
+  });
   on(elements.addScheduleForm, "submit", addSchedule);
+  on(elements.cancelScheduleEditButton, "click", cancelScheduleEdit);
   on(elements.assignmentRulesForm, "submit", saveAssignmentRules);
-  on(elements.assignmentPolicySelect, "change", renderAssignmentPolicyHelp);
+  on(elements.assignmentPolicyDescriptions, "click", selectAssignmentPolicyFromCard);
+  on(elements.showAddShiftButton, "click", toggleShiftAddForm);
+  on(elements.cancelAddShiftButton, "click", cancelShiftAddForm);
   on(elements.addShiftForm, "submit", addShiftTemplate);
   on(elements.shiftTemplateSelect, "change", applyShiftTemplate);
+  on(elements.scheduleStartDateInput, "change", () => normalizeScheduleDateRangeInputs("start"));
+  on(elements.scheduleEndDateInput, "change", () => normalizeScheduleDateRangeInputs("end"));
   on(elements.scheduleStartInput, "input", () => elements.shiftTemplateSelect.value = "custom");
   on(elements.scheduleEndInput, "input", () => elements.shiftTemplateSelect.value = "custom");
-  on(elements.scheduleViewSelect, "change", renderTimelineTools);
+  on(elements.scheduleViewSelect, "change", renderTimezoneSensitiveAdminViews);
   on(elements.timelineUserSelect, "change", renderTimelineTools);
-  on(elements.timelineDateInput, "change", renderTimelineTools);
+  on(elements.timelineDateInput, "change", () => {
+    syncScheduleDateRangeToGraphWeek();
+    renderTimezoneSensitiveAdminViews();
+  });
+  on(elements.slotDateInput, "change", renderAdminTimezoneLabels);
+  on(elements.timelineCanvas, "pointerdown", startTimelineDraft);
+  on(elements.timelineCanvas, "pointermove", moveTimelineDraft);
   on(elements.timelineCanvas, "click", prefillSlotFromTimeline);
+  on(elements.saveTimelineDraftButton, "click", saveTimelineDraftSchedule);
+  on(elements.clearTimelineDraftButton, "click", clearTimelineDraft);
   on(elements.addSlotForm, "submit", addTimelineSlot);
   on(elements.addSystemForm, "submit", addSystem);
   on(elements.addHolidayForm, "submit", addHoliday);
   on(elements.exportButton, "click", exportData);
   on(elements.importInput, "change", importData);
   on(elements.resetButton, "click", resetData);
+  document.addEventListener("keydown", handleGlobalKeydown);
+  document.addEventListener("pointerup", finishTimelineDraft);
 }
 
 function on(element, eventName, handler) {
   if (element) {
     element.addEventListener(eventName, handler);
   }
+}
+
+function handleGlobalKeydown(event) {
+  if (event.key === "Escape" && elements.removeUserModal && !elements.removeUserModal.classList.contains("hidden")) {
+    closeRemoveUserModal();
+  }
+  if (event.key === "Escape" && elements.removeShiftModal && !elements.removeShiftModal.classList.contains("hidden")) {
+    closeRemoveShiftModal();
+  }
+  if (event.key === "Escape" && elements.removeScheduleModal && !elements.removeScheduleModal.classList.contains("hidden")) {
+    closeRemoveScheduleModal();
+  }
+  if (event.key === "Escape" && elements.removeHolidayModal && !elements.removeHolidayModal.classList.contains("hidden")) {
+    closeRemoveHolidayModal();
+  }
+  if (event.key === "Escape" && elements.backupUnlockModal && !elements.backupUnlockModal.classList.contains("hidden")) {
+    closeBackupUnlockModal();
+  }
+  if (event.key === "Escape" && elements.devModeModal && !elements.devModeModal.classList.contains("hidden")) {
+    closeDevModeModal();
+  }
+  if (event.key === "Escape" && elements.syncStateModal && !elements.syncStateModal.classList.contains("hidden")) {
+    closeSyncStateModal();
+  }
+}
+
+function loadTheme() {
+  return getSavedTheme() || getBrowserTheme();
+}
+
+function toggleTheme() {
+  const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  applyTheme(nextTheme);
+  localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+}
+
+function bindBrowserThemePreference() {
+  if (!window.matchMedia) {
+    return;
+  }
+
+  const browserThemePreference = window.matchMedia(THEME_MEDIA_QUERY);
+  const syncThemeWithBrowserPreference = () => {
+    if (!getSavedTheme()) {
+      applyTheme(getBrowserTheme());
+    }
+  };
+
+  if (browserThemePreference.addEventListener) {
+    browserThemePreference.addEventListener("change", syncThemeWithBrowserPreference);
+  } else if (browserThemePreference.addListener) {
+    browserThemePreference.addListener(syncThemeWithBrowserPreference);
+  }
+}
+
+function getSavedTheme() {
+  const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+  if (savedTheme === "bright") {
+    localStorage.setItem(THEME_STORAGE_KEY, "light");
+    return "light";
+  }
+
+  return savedTheme === "dark" || savedTheme === "light" ? savedTheme : null;
+}
+
+function getBrowserTheme() {
+  return window.matchMedia?.(THEME_MEDIA_QUERY).matches ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+    const isDark = theme === "dark";
+    const icon = button.querySelector("[data-theme-toggle-icon]");
+    const text = button.querySelector("[data-theme-toggle-text]");
+    if (icon) {
+      icon.textContent = isDark ? "☾" : "☀";
+    }
+    if (text) {
+      text.textContent = isDark ? "Dark" : "Light";
+    }
+    button.setAttribute("aria-label", `Switch to ${isDark ? "light" : "dark"} mode`);
+  });
 }
 
 function activateTab(tabName) {
@@ -213,40 +484,362 @@ function activateTab(tabName) {
 function render() {
   normalizeData();
   setDefaultDates();
-  saveData();
+  initializeAdminTimeInputs();
   renderSystemSelect();
   renderUserSelectors();
   renderShiftTemplateSelect();
   renderAssignmentRules();
+  renderScheduleFormMode();
+  renderAdminTimezoneLabels();
   renderShifts();
+  renderShiftAddForm();
   renderUsers();
   renderSystems();
   renderHolidays();
   renderTimelineTools();
   renderDataPreview();
+  renderDisplayTimezoneSelect();
   renderClockAndAssignment();
   renderAdminLocks();
 }
 
 function renderClockAndAssignment() {
   const easternNow = getEasternNow();
-  if (elements.currentEtTime) {
-    elements.currentEtTime.textContent = `${easternNow.day} ${easternNow.date} · ${easternNow.time}`;
-  }
+  const activityNow = getEffectiveQueueNow(easternNow);
+  renderDebugTimeControls(easternNow);
+  renderDisplayTimezoneSelect(easternNow);
 
   if (!elements.assignmentSystemSelect) {
     return;
   }
 
-  const queueState = getQueueState(elements.assignmentSystemSelect.value, easternNow);
+  const shiftOrderMode = isShiftOrderPolicy();
+  const hasQueueContext = shiftOrderMode || Boolean(elements.assignmentSystemSelect.value);
+  setAssignmentPickerVisible(!shiftOrderMode);
+  setAssignmentSectionsVisible(hasQueueContext);
+  if (elements.assignmentQueueTitle) {
+    elements.assignmentQueueTitle.textContent = shiftOrderMode ? "Shift queue" : "Coverage queue";
+  }
+
+  if (!hasQueueContext) {
+    selectedAssigneeId = null;
+    renderAssignmentConfirmation(false);
+    renderSuggestion({ system: null, rows: [], recommendedRow: null });
+    renderQueue({ system: null, rows: [], recommendedRow: null });
+    renderDailyRankings(activityNow.date);
+    renderQueueDashboard(easternNow);
+    renderAssignmentLog();
+    return;
+  }
+
+  const queueState = getQueueState(getAssignmentQueueSystemId(), easternNow);
   if (!queueState.rows.some((row) => row.user.id === selectedAssigneeId && row.selectable)) {
     selectedAssigneeId = queueState.recommendedRow?.user.id ?? null;
   }
 
   renderSuggestion(queueState);
   renderQueue(queueState);
-  renderDailyRankings(easternNow.date);
+  renderAssignmentConfirmation(true);
+  renderDailyRankings(queueState.effectiveNow.date);
+  renderQueueDashboard(easternNow);
   renderAssignmentLog();
+}
+
+function setAssignmentSectionsVisible(isVisible) {
+  elements.queueSection?.classList.toggle("hidden", !isVisible);
+}
+
+function setAssignmentPickerVisible(isVisible) {
+  elements.assignmentSystemSelect?.closest(".field")?.classList.toggle("hidden", !isVisible);
+}
+
+function renderDisplayTimezoneSelect(easternNow = getEasternNow()) {
+  if (!elements.displayTimezoneSelect) {
+    return;
+  }
+
+  selectedDisplayTimezoneId = getDisplayTimezone(selectedDisplayTimezoneId).id;
+  const timezoneOptions = DISPLAY_TIMEZONES.map((timezone) => (
+    `<option value="${escapeHtml(timezone.id)}">${escapeHtml(formatDisplayClock(easternNow, timezone))}</option>`
+  ));
+  if (elements.debugTimeCard) {
+    timezoneOptions.push(`<option value="${DEV_MODE_TIME_OPTION_ID}">Dev mode: test time</option>`);
+  }
+  elements.displayTimezoneSelect.innerHTML = timezoneOptions.join("");
+  elements.displayTimezoneSelect.value = selectedDisplayTimezoneId;
+}
+
+function changeDisplayTimezone() {
+  if (elements.displayTimezoneSelect.value === DEV_MODE_TIME_OPTION_ID) {
+    elements.displayTimezoneSelect.value = selectedDisplayTimezoneId;
+    openDevModeModal();
+    return;
+  }
+
+  const previousTimezone = getSelectedDisplayTimezone();
+  const scheduleFormTimes = captureScheduleFormTimes(previousTimezone);
+  const slotFormTimes = captureSlotFormTimes(previousTimezone);
+  const shiftAddFormTimes = captureShiftAddFormTimes(previousTimezone);
+  selectedDisplayTimezoneId = getDisplayTimezone(elements.displayTimezoneSelect.value).id;
+  localStorage.setItem(DISPLAY_TIMEZONE_STORAGE_KEY, selectedDisplayTimezoneId);
+  if (elements.debugTimeCard && (devModeUnlocked || debugTimeOverride)) {
+    clearDevModeState();
+  }
+  restoreScheduleFormTimes(scheduleFormTimes);
+  restoreSlotFormTimes(slotFormTimes);
+  restoreShiftAddFormTimes(shiftAddFormTimes);
+  renderTimezoneSensitiveAdminViews();
+  renderClockAndAssignment();
+}
+
+function renderTimezoneSensitiveAdminViews() {
+  renderAdminTimezoneLabels();
+  renderShiftTemplateSelect();
+  renderShifts();
+  renderTimelineTools();
+}
+
+function renderAdminTimezoneLabels() {
+  const abbreviation = getSelectedTimezoneAbbreviationForDate(getScheduleReferenceDate());
+  const labelMap = [
+    [elements.scheduleDaysLegend, `Schedule days (${abbreviation})`],
+    [elements.scheduleStartLabel, `Start ${abbreviation}`],
+    [elements.scheduleEndLabel, `End ${abbreviation}`],
+    [elements.scheduleGraphTitle, `Schedule graph (${abbreviation})`],
+    [elements.slotStartLabel, `Start ${abbreviation}`],
+    [elements.slotEndLabel, `End ${abbreviation}`],
+    [elements.shiftStartLabel, `Start ${abbreviation}`],
+    [elements.shiftEndLabel, `End ${abbreviation}`]
+  ];
+
+  labelMap.forEach(([element, text]) => {
+    if (element) {
+      element.textContent = text;
+    }
+  });
+}
+
+function initializeAdminTimeInputs() {
+  if (adminTimeInputsInitialized) {
+    return;
+  }
+
+  const date = getScheduleReferenceDate();
+  if (elements.scheduleStartInput) {
+    elements.scheduleStartInput.value = formatEasternTimeInputForDisplay(date, elements.scheduleStartInput.value || "09:00");
+  }
+  if (elements.scheduleEndInput) {
+    elements.scheduleEndInput.value = formatEasternTimeInputForDisplay(date, elements.scheduleEndInput.value || "17:00");
+  }
+  if (elements.slotStartInput) {
+    elements.slotStartInput.value = formatEasternTimeInputForDisplay(date, elements.slotStartInput.value || "12:00");
+  }
+  if (elements.slotEndInput) {
+    elements.slotEndInput.value = formatEasternTimeInputForDisplay(date, elements.slotEndInput.value || "12:30");
+  }
+  if (elements.shiftStartInput) {
+    elements.shiftStartInput.value = formatEasternTimeInputForDisplay(date, elements.shiftStartInput.value || "09:00");
+  }
+  if (elements.shiftEndInput) {
+    elements.shiftEndInput.value = formatEasternTimeInputForDisplay(date, elements.shiftEndInput.value || "17:00");
+  }
+
+  adminTimeInputsInitialized = true;
+}
+
+function captureScheduleFormTimes(timezone) {
+  if (!elements.scheduleStartInput || !elements.scheduleEndInput) {
+    return null;
+  }
+
+  const date = getScheduleReferenceDate();
+  return {
+    start: convertDisplayDateTimeToEastern(date, elements.scheduleStartInput.value, timezone).time,
+    end: convertDisplayDateTimeToEastern(date, elements.scheduleEndInput.value, timezone).time
+  };
+}
+
+function restoreScheduleFormTimes(times) {
+  if (!times) {
+    return;
+  }
+
+  const date = getScheduleReferenceDate();
+  if (elements.scheduleStartInput) {
+    elements.scheduleStartInput.value = formatEasternTimeInputForDisplay(date, times.start);
+  }
+  if (elements.scheduleEndInput) {
+    elements.scheduleEndInput.value = formatEasternTimeInputForDisplay(date, times.end);
+  }
+}
+
+function captureSlotFormTimes(timezone) {
+  if (!elements.slotStartInput || !elements.slotEndInput) {
+    return null;
+  }
+
+  const date = elements.slotDateInput?.value || getScheduleReferenceDate();
+  return {
+    start: convertDisplayDateTimeToEastern(date, elements.slotStartInput.value, timezone).time,
+    end: convertDisplayDateTimeToEastern(date, elements.slotEndInput.value, timezone).time
+  };
+}
+
+function restoreSlotFormTimes(times) {
+  if (!times) {
+    return;
+  }
+
+  const date = elements.slotDateInput?.value || getScheduleReferenceDate();
+  if (elements.slotStartInput) {
+    elements.slotStartInput.value = formatEasternTimeInputForDisplay(date, times.start);
+  }
+  if (elements.slotEndInput) {
+    elements.slotEndInput.value = formatEasternTimeInputForDisplay(date, times.end);
+  }
+}
+
+function captureShiftAddFormTimes(timezone) {
+  if (!elements.shiftStartInput || !elements.shiftEndInput) {
+    return null;
+  }
+
+  const date = getScheduleReferenceDate();
+  return {
+    start: convertDisplayDateTimeToEastern(date, elements.shiftStartInput.value, timezone).time,
+    end: convertDisplayDateTimeToEastern(date, elements.shiftEndInput.value, timezone).time
+  };
+}
+
+function restoreShiftAddFormTimes(times) {
+  if (!times) {
+    return;
+  }
+
+  const date = getScheduleReferenceDate();
+  if (elements.shiftStartInput) {
+    elements.shiftStartInput.value = formatEasternTimeInputForDisplay(date, times.start);
+  }
+  if (elements.shiftEndInput) {
+    elements.shiftEndInput.value = formatEasternTimeInputForDisplay(date, times.end);
+  }
+}
+
+function maybePromptForDevMode() {
+  if (!elements.debugTimeCard || devModeUnlocked) {
+    return;
+  }
+
+  if (isDevModeRequested()) {
+    window.setTimeout(openDevModeModal, 0);
+  }
+}
+
+function isDevModeRequested() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("dev") === "1" || params.get("devMode") === "1";
+}
+
+function openDevModeModal() {
+  if (!elements.devModeModal) {
+    devModeUnlocked = true;
+    renderDebugTimeControls(getEasternNow());
+    return;
+  }
+
+  elements.devModeModal.classList.remove("hidden");
+  elements.devModeModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.cancelDevModeButton?.focus(), 0);
+}
+
+function closeDevModeModal() {
+  if (!elements.devModeModal) {
+    return;
+  }
+
+  elements.devModeModal.classList.add("hidden");
+  elements.devModeModal.setAttribute("aria-hidden", "true");
+  renderDisplayTimezoneSelect(getEasternNow());
+}
+
+function confirmDevMode() {
+  devModeUnlocked = true;
+  closeDevModeModal();
+  renderDebugTimeControls(getEasternNow());
+  window.setTimeout(() => elements.debugDateInput?.focus(), 0);
+}
+
+function renderDebugTimeControls(easternNow) {
+  if (!elements.debugDateInput || !elements.debugTimeInput) {
+    return;
+  }
+
+  const showDevTools = devModeUnlocked;
+  elements.debugTimeCard?.classList.toggle("hidden", !showDevTools);
+  if (!showDevTools) {
+    elements.debugTimeStatus?.classList.add("hidden");
+    return;
+  }
+
+  if (debugTimeOverride) {
+    elements.debugDateInput.value = debugTimeOverride.date;
+    elements.debugTimeInput.value = debugTimeOverride.time;
+  } else {
+    elements.debugDateInput.value ||= easternNow.date;
+    elements.debugTimeInput.value ||= easternNow.time;
+  }
+
+  if (elements.debugTimeStatus) {
+    elements.debugTimeStatus.classList.toggle("hidden", !debugTimeOverride);
+    elements.debugTimeStatus.textContent = debugTimeOverride
+      ? `Testing ${easternNow.day}, ${easternNow.displayDate} at ${easternNow.time} ET`
+      : "";
+  }
+}
+
+function applyDebugTimeOverride() {
+  if (!elements.debugDateInput || !elements.debugTimeInput) {
+    return;
+  }
+
+  const date = elements.debugDateInput.value;
+  const time = elements.debugTimeInput.value;
+  if (!isValidDateInput(date) || !isValidTimeInput(time)) {
+    window.alert("Pick a valid test date and ET time.");
+    return;
+  }
+
+  debugTimeOverride = { date, time };
+  devModeUnlocked = true;
+  saveDebugTimeOverride();
+  selectedAssigneeId = null;
+  refreshAfterEffectiveTimeChange();
+}
+
+function resetDebugTimeOverride() {
+  clearDevModeState();
+  selectedAssigneeId = null;
+  const liveNow = getLiveEasternNow();
+  if (elements.debugDateInput) {
+    elements.debugDateInput.value = liveNow.date;
+  }
+  if (elements.debugTimeInput) {
+    elements.debugTimeInput.value = liveNow.time;
+  }
+  refreshAfterEffectiveTimeChange();
+}
+
+function clearDevModeState() {
+  debugTimeOverride = null;
+  devModeUnlocked = false;
+  clearDebugTimeOverride();
+  elements.debugTimeCard?.classList.add("hidden");
+  elements.debugTimeStatus?.classList.add("hidden");
+}
+
+function refreshAfterEffectiveTimeChange() {
+  renderTimezoneSensitiveAdminViews();
+  renderClockAndAssignment();
 }
 
 function renderSystemSelect() {
@@ -257,6 +850,11 @@ function renderSystemSelect() {
   const selectedValue = elements.assignmentSystemSelect.value;
   elements.assignmentSystemSelect.innerHTML = "";
 
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Select coverage";
+  elements.assignmentSystemSelect.append(placeholder);
+
   data.systems.forEach((system) => {
     const option = document.createElement("option");
     option.value = system.id;
@@ -266,6 +864,8 @@ function renderSystemSelect() {
 
   if (data.systems.some((system) => system.id === selectedValue)) {
     elements.assignmentSystemSelect.value = selectedValue;
+  } else {
+    elements.assignmentSystemSelect.value = "";
   }
 }
 
@@ -308,12 +908,14 @@ function renderShiftTemplateSelect() {
   }
 
   const selectedValue = elements.shiftTemplateSelect.value || "regular";
+  const date = getScheduleReferenceDate();
+  const abbreviation = getSelectedTimezoneAbbreviationForDate(date);
   elements.shiftTemplateSelect.innerHTML = "";
 
   data.shiftTemplates.forEach((template) => {
     const option = document.createElement("option");
     option.value = template.id;
-    option.textContent = `${template.name} · ${template.start}–${template.end}`;
+    option.textContent = `${template.name} · ${formatEasternTimeInputForDisplay(date, template.start)}–${formatEasternTimeInputForDisplay(date, template.end)} ${abbreviation}`;
     elements.shiftTemplateSelect.append(option);
   });
 
@@ -332,28 +934,32 @@ function renderShifts() {
     return;
   }
 
+  const date = getScheduleReferenceDate();
+  const abbreviation = getSelectedTimezoneAbbreviationForDate(date);
   const rows = data.shiftTemplates.map((template) => `
     <div class="shift-row" data-shift-id="${escapeHtml(template.id)}">
-      <label class="field">
-        <span>Name</span>
-        <input class="shift-name-field" type="text" value="${escapeHtml(template.name)}">
-      </label>
-      <label class="field">
-        <span>Start</span>
-        <input class="shift-start-field" type="time" value="${escapeHtml(template.start)}">
-      </label>
-      <label class="field">
-        <span>End</span>
-        <input class="shift-end-field" type="time" value="${escapeHtml(template.end)}">
-      </label>
-      <div class="item-actions">
+      <div class="shift-row-fields">
+        <label class="field shift-name-control">
+          <span>Name</span>
+          <input class="shift-name-field" type="text" value="${escapeHtml(template.name)}">
+        </label>
+        <label class="field shift-time-control">
+          <span>Start ${escapeHtml(abbreviation)}</span>
+          <input class="shift-start-field" type="time" value="${escapeHtml(formatEasternTimeInputForDisplay(date, template.start))}">
+        </label>
+        <label class="field shift-time-control">
+          <span>End ${escapeHtml(abbreviation)}</span>
+          <input class="shift-end-field" type="time" value="${escapeHtml(formatEasternTimeInputForDisplay(date, template.end))}">
+        </label>
+      </div>
+      <div class="item-actions shift-row-actions">
         <button class="small-button" type="button" data-action="update-shift" data-shift-id="${escapeHtml(template.id)}">Update</button>
         <button class="remove-button" type="button" data-action="remove-shift" data-shift-id="${escapeHtml(template.id)}">Remove</button>
       </div>
     </div>
   `).join("");
 
-  elements.shiftsList.innerHTML = rows || emptyState("No shift presets yet.");
+  elements.shiftsList.innerHTML = rows || emptyState("No shifts yet.");
   elements.shiftsList.querySelectorAll("[data-action='update-shift']").forEach((button) => {
     button.addEventListener("click", () => updateShiftTemplate(button.dataset.shiftId));
   });
@@ -362,31 +968,96 @@ function renderShifts() {
   });
 }
 
-function renderAssignmentRules() {
-  if (!elements.assignmentPolicySelect) {
+function renderShiftAddForm() {
+  if (!elements.addShiftForm || !elements.showAddShiftButton) {
     return;
   }
 
-  const selectedValue = data.assignmentRules?.preset || DEFAULT_ASSIGNMENT_RULES.preset;
-  elements.assignmentPolicySelect.innerHTML = ASSIGNMENT_RULE_PRESETS.map((preset) => (
-    `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.name)}</option>`
-  )).join("");
-  elements.assignmentPolicySelect.value = getAssignmentRulePreset(selectedValue).id;
-  renderAssignmentPolicyHelp();
+  elements.addShiftForm.classList.toggle("hidden", !shiftAddFormOpen);
+  elements.showAddShiftButton.textContent = shiftAddFormOpen ? "Close" : "Add shift";
+  elements.showAddShiftButton.setAttribute("aria-expanded", String(shiftAddFormOpen));
 }
 
-function renderAssignmentPolicyHelp() {
-  if (!elements.assignmentPolicyHelp || !elements.assignmentPolicySelect) {
+function toggleShiftAddForm() {
+  if (!isAdminTabUnlocked("shifts")) {
     return;
   }
 
-  const preset = getAssignmentRulePreset(elements.assignmentPolicySelect.value);
-  elements.assignmentPolicyHelp.innerHTML = `
-    <div class="policy-summary">${escapeHtml(preset.summary)}</div>
-    <ol>
-      ${preset.rules.map((rule) => `<li>${escapeHtml(getAssignmentRuleLabel(rule))}</li>`).join("")}
-    </ol>
-  `;
+  shiftAddFormOpen = !shiftAddFormOpen;
+  renderShiftAddForm();
+  renderAdminLocks();
+
+  if (shiftAddFormOpen) {
+    window.setTimeout(() => elements.shiftNameInput?.focus(), 0);
+  }
+}
+
+function cancelShiftAddForm() {
+  shiftAddFormOpen = false;
+  resetShiftAddForm();
+  renderShiftAddForm();
+  renderAdminLocks();
+}
+
+function resetShiftAddForm() {
+  if (!elements.addShiftForm) {
+    return;
+  }
+
+  elements.addShiftForm.reset();
+  const date = getScheduleReferenceDate();
+  if (elements.shiftStartInput) {
+    elements.shiftStartInput.value = formatEasternTimeInputForDisplay(date, "09:00");
+  }
+  if (elements.shiftEndInput) {
+    elements.shiftEndInput.value = formatEasternTimeInputForDisplay(date, "17:00");
+  }
+}
+
+function renderAssignmentRules() {
+  if (!elements.assignmentPolicyDescriptions) {
+    return;
+  }
+
+  selectedAssignmentPolicyId = getAssignmentRulePreset(selectedAssignmentPolicyId || data.assignmentRules?.preset).id;
+  renderAssignmentPolicyDescriptions();
+}
+
+function renderAssignmentPolicyDescriptions() {
+  if (!elements.assignmentPolicyDescriptions) {
+    return;
+  }
+
+  const selectedPreset = getAssignmentRulePreset(selectedAssignmentPolicyId || data.assignmentRules?.preset);
+  elements.assignmentPolicyDescriptions.innerHTML = ASSIGNMENT_RULE_PRESETS.map((preset) => {
+    const selectedClass = preset.id === selectedPreset.id ? " selected" : "";
+    const currentLabel = preset.id === selectedPreset.id ? "<span class=\"policy-current\">Selected</span>" : "";
+    const chain = getAssignmentRuleChain(preset).map((rule, index) => `
+      <li>
+        <span>${index + 1}</span>
+        <strong>${escapeHtml(ASSIGNMENT_RULE_LABELS[rule])}</strong>
+      </li>
+    `).join("");
+    return `
+      <button class="policy-description-card${selectedClass}" type="button" data-policy-id="${escapeHtml(preset.id)}">
+        <span class="policy-description-title">
+          <strong>${escapeHtml(preset.name)}</strong>
+          ${currentLabel}
+        </span>
+        <ol class="policy-chain-list">${chain}</ol>
+      </button>
+    `;
+  }).join("");
+}
+
+function selectAssignmentPolicyFromCard(event) {
+  const card = event.target.closest("[data-policy-id]");
+  if (!card || card.disabled) {
+    return;
+  }
+
+  selectedAssignmentPolicyId = getAssignmentRulePreset(card.dataset.policyId).id;
+  renderAssignmentPolicyDescriptions();
 }
 
 function renderAdminLocks() {
@@ -403,7 +1074,6 @@ function renderAdminLocks() {
     lockBar.innerHTML = `
       <div>
         <strong>${unlocked ? "Editing unlocked" : "Editing locked"}</strong>
-        <p class="help-text">${unlocked ? "Make your changes, then use the save/add/remove button." : "Unlock before changing this setup section."}</p>
       </div>
       <button class="${unlocked ? "secondary-button" : "primary-button"}" type="button" data-lock-action="${unlocked ? "lock" : "unlock"}" data-tab="${escapeHtml(tabName)}">
         ${unlocked ? "Lock" : "Unlock changes"}
@@ -435,11 +1105,42 @@ function handleAdminLockAction(event) {
 
   const tabName = button.dataset.tab;
   if (button.dataset.lockAction === "unlock") {
+    if (tabName === "data" && !unlockedAdminTabs.has("data")) {
+      openBackupUnlockModal();
+      return;
+    }
     unlockedAdminTabs.add(tabName);
   } else {
     unlockedAdminTabs.delete(tabName);
   }
 
+  renderAdminLocks();
+}
+
+function openBackupUnlockModal() {
+  if (!elements.backupUnlockModal) {
+    unlockedAdminTabs.add("data");
+    renderAdminLocks();
+    return;
+  }
+
+  elements.backupUnlockModal.classList.remove("hidden");
+  elements.backupUnlockModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.cancelBackupUnlockButton?.focus(), 0);
+}
+
+function closeBackupUnlockModal() {
+  if (!elements.backupUnlockModal) {
+    return;
+  }
+
+  elements.backupUnlockModal.classList.add("hidden");
+  elements.backupUnlockModal.setAttribute("aria-hidden", "true");
+}
+
+function confirmBackupUnlock() {
+  unlockedAdminTabs.add("data");
+  closeBackupUnlockModal();
   renderAdminLocks();
 }
 
@@ -452,8 +1153,39 @@ function completeAdminSave(message = "Saved.", tabName = null) {
     unlockedAdminTabs.delete(tabName);
   }
 
-  render();
-  showSaveToast(message);
+  completeDataSave(message, { showToast: true });
+}
+
+function completeDataSave(message = "Saved.", options = {}) {
+  normalizeData();
+  const snapshot = cloneData(data);
+  const saveGeneration = sharedStateGeneration;
+
+  const pendingSave = sharedStateSaveQueue
+    .catch(() => {})
+    .then(async () => {
+      if (saveGeneration !== sharedStateGeneration) {
+        return { status: "skipped" };
+      }
+
+      return persistDataSnapshot(snapshot);
+    })
+    .then((result) => {
+      if (result.status !== "saved") {
+        return;
+      }
+
+      applyPersistedData(result.data, result.revision);
+      render();
+      if (options.showToast !== false) {
+        showSaveToast(message);
+      }
+    })
+    .catch((error) => {
+      handleSharedStateSaveError(error);
+    });
+
+  sharedStateSaveQueue = pendingSave.catch(() => {});
 }
 
 function showSaveToast(message) {
@@ -472,57 +1204,41 @@ function showSaveToast(message) {
 }
 
 function getAssignmentRulePreset(presetId) {
-  return ASSIGNMENT_RULE_PRESETS.find((preset) => preset.id === presetId) || ASSIGNMENT_RULE_PRESETS[0];
+  const defaultPreset = ASSIGNMENT_RULE_PRESETS.find((preset) => preset.id === DEFAULT_ASSIGNMENT_RULES.preset) || ASSIGNMENT_RULE_PRESETS[0];
+  return ASSIGNMENT_RULE_PRESETS.find((preset) => preset.id === presetId) || defaultPreset;
 }
 
-function getAssignmentRuleLabel(rule) {
-  if (rule === "schedule") {
-    return "Schedule start time";
-  }
+function getAssignmentRuleChain(preset) {
+  return ALWAYS_ASSIGNMENT_RULES.concat(preset.rules);
+}
 
-  if (rule === "systemPriority") {
-    return "System/app SME priority";
-  }
+function isShiftOrderPolicy() {
+  return getAssignmentRulePreset(data.assignmentRules?.preset).id === SHIFT_ORDER_PRESET_ID;
+}
 
-  if (rule === "dailyTickets") {
-    return "Fewest tickets assigned today";
-  }
-
-  if (rule === "consecutiveTickets") {
-    return "Fewest tickets assigned in a row";
-  }
-
-  return rule;
+function getAssignmentQueueSystemId() {
+  return isShiftOrderPolicy()
+    ? SHIFT_QUEUE_SYSTEM_ID
+    : elements.assignmentSystemSelect?.value || "";
 }
 
 function renderSuggestion(queueState) {
-  if (!elements.suggestionCard || !elements.markAssignedButton || !elements.selectedAssigneeText) {
+  if (!elements.markAssignedButton) {
     return;
   }
 
   if (!queueState.system) {
-    elements.suggestionCard.innerHTML = `<span class="suggestion-name">No system selected</span><span class="suggestion-meta">Add a system/app from Admin tools.</span>`;
     elements.markAssignedButton.disabled = true;
-    elements.selectedAssigneeText.textContent = "Select a user from the queue.";
     return;
   }
 
   const selectedRow = queueState.rows.find((row) => row.user.id === selectedAssigneeId);
   if (!selectedRow) {
-    elements.suggestionCard.innerHTML = `<span class="suggestion-name">No selectable SME</span><span class="suggestion-meta">No one in this queue is available now or later today.</span>`;
     elements.markAssignedButton.disabled = true;
-    elements.selectedAssigneeText.textContent = "No selectable user.";
     return;
   }
 
-  elements.suggestionCard.innerHTML = `
-    <span class="suggestion-name">${escapeHtml(selectedRow.user.name)}</span>
-    <span class="suggestion-meta">${escapeHtml(selectedRow.message)}</span>
-  `;
   elements.markAssignedButton.disabled = !selectedRow.selectable;
-  elements.selectedAssigneeText.textContent = selectedRow.selectable
-    ? `Selected: ${selectedRow.user.name}`
-    : `${selectedRow.user.name} cannot be selected for today.`;
 }
 
 function renderQueue(queueState) {
@@ -530,20 +1246,34 @@ function renderQueue(queueState) {
     return;
   }
 
+  if (!queueState.system) {
+    elements.queueList.innerHTML = "";
+    return;
+  }
+
   const rows = queueState.rows.map((row, index) => {
     const selectedClass = row.user.id === selectedAssigneeId ? " selected" : "";
     const disabled = row.selectable ? "" : "disabled";
-    const metricText = `${row.dailyTickets} today · ${row.consecutiveTickets} in a row · System #${row.systemPriority + 1}`;
+    const metricText = `${row.dailyTickets} today · ${row.consecutiveTickets} in a row`;
+    const fallbackDisclaimer = row.user.id === selectedAssigneeId && !row.isCoverageMember
+      ? "<span class=\"queue-disclaimer\">Fallback pick — not an SME for this coverage.</span>"
+      : "";
     return `
-      <button class="queue-card ${row.status}${selectedClass}" type="button" data-user-id="${escapeHtml(row.user.id)}" ${disabled}>
-        <span class="queue-card-header">
-          <span class="queue-position">${index === 0 ? "Next in queue" : `Queue #${index + 1}`}</span>
-          <span class="status-pill ${row.status}">${escapeHtml(row.badge)}</span>
-        </span>
-        <span class="queue-name">${escapeHtml(row.user.name)}</span>
-        <span class="meta">${escapeHtml(row.message)}</span>
-        <span class="queue-metrics">${escapeHtml(metricText)}</span>
-      </button>
+      <div class="queue-step queue-rank-${index % 5} ${row.status}${selectedClass}">
+        <div class="queue-stop" aria-hidden="true">
+          <span>${index + 1}</span>
+        </div>
+        <button class="queue-card ${row.status}${selectedClass}" type="button" data-user-id="${escapeHtml(row.user.id)}" ${disabled}>
+          <span class="queue-card-header">
+            <span class="queue-position">${getOrdinalLabel(index + 1)} in queue</span>
+            ${renderQueueStatusBadge(row, { showWaitTime: true })}
+          </span>
+          <span class="queue-name">${escapeHtml(row.user.name)}</span>
+          <span class="meta">${escapeHtml(getQueueCardMessage(row))}</span>
+          <span class="queue-metrics">${escapeHtml(metricText)}</span>
+          ${fallbackDisclaimer}
+        </button>
+      </div>
     `;
   }).join("");
 
@@ -554,6 +1284,89 @@ function renderQueue(queueState) {
       renderClockAndAssignment();
     });
   });
+}
+
+function renderQueueDashboard(easternNow) {
+  if (!elements.queueDashboardPanel || !elements.queueDashboardList) {
+    return;
+  }
+
+  const shiftOrderMode = isShiftOrderPolicy();
+  if (shiftOrderMode) {
+    showQueueDashboard = false;
+  }
+
+  elements.activityPanelSection?.classList.toggle("has-open-panel", showQueueDashboard || showRecentAssignments);
+  elements.queueDashboardPanel.classList.toggle("hidden", !showQueueDashboard);
+
+  if (elements.toggleQueueDashboardButton) {
+    elements.toggleQueueDashboardButton.classList.toggle("hidden", shiftOrderMode);
+    elements.toggleQueueDashboardButton.textContent = showQueueDashboard ? "Hide all queues" : "Show all queues";
+  }
+
+  if (!showQueueDashboard) {
+    elements.queueDashboardList.innerHTML = "";
+    return;
+  }
+
+  const cards = data.systems.map((system) => {
+    const queueState = getQueueState(system.id, easternNow);
+    const coverageTicketCount = getDailyCoverageAssignmentCount(system, queueState.effectiveNow.date);
+    const rows = queueState.rows.map((row, index) => {
+      const nextClass = index === 0 ? " next" : "";
+      const metricText = `${row.dailyTickets} today · ${row.consecutiveTickets} in a row`;
+      return `
+        <li class="dashboard-queue-row ${row.status}${nextClass}">
+          <span class="dashboard-queue-number">${index + 1}</span>
+          <span class="dashboard-queue-person">
+            <strong>${escapeHtml(row.user.name)}</strong>
+            <small>${escapeHtml(metricText)}</small>
+          </span>
+          ${renderQueueStatusBadge(row, { showWaitTime: true })}
+        </li>
+      `;
+    }).join("");
+
+    return `
+      <article class="queue-dashboard-row-card">
+        <div class="dashboard-system-label">
+          <h4>${escapeHtml(system.name)}</h4>
+          <span class="dashboard-coverage-meta">
+            <strong>${coverageTicketCount} ticket${coverageTicketCount === 1 ? "" : "s"} today</strong>
+          </span>
+        </div>
+        <ol class="dashboard-queue-list">
+          ${rows || "<li class=\"empty-state\">No SMEs assigned.</li>"}
+        </ol>
+        <button class="small-button dashboard-open-button" type="button" data-dashboard-system-id="${escapeHtml(system.id)}">Open</button>
+      </article>
+    `;
+  }).join("");
+
+  elements.queueDashboardList.innerHTML = cards || emptyState("No systems/apps yet.");
+  elements.queueDashboardList.querySelectorAll("[data-dashboard-system-id]").forEach((button) => {
+    button.addEventListener("click", () => openDashboardSystem(button.dataset.dashboardSystemId));
+  });
+}
+
+function renderQueueStatusBadge(row, options = {}) {
+  const badge = options.showWaitTime && row.status === "later"
+    ? `Available in ${formatWaitDuration(row.waitMinutes)}`
+    : row.badge;
+
+  return row.status === "available"
+    ? ""
+    : `<span class="status-pill ${row.status}">${escapeHtml(badge)}</span>`;
+}
+
+function getQueueCardMessage(row) {
+  if (row.status === "later") {
+    const availableIn = formatWaitDuration(row.waitMinutes);
+    const availableAt = formatEasternTimeForDisplay(row.effectiveDate, minutesToTime(row.availabilityStart));
+    return `Available in ${availableIn} at ${availableAt}. You can pick them anyway.`;
+  }
+
+  return row.message.replace(/;\s*/g, ". ");
 }
 
 function renderDailyRankings(date) {
@@ -570,7 +1383,7 @@ function renderDailyRankings(date) {
     </div>
   `).join("");
 
-  elements.dailyRankingsList.innerHTML = rows || emptyState("Add users to see ticket ownership.");
+  elements.dailyRankingsList.innerHTML = rows || emptyState("No tickets assigned today yet.");
 }
 
 function renderAssignmentLog() {
@@ -578,20 +1391,239 @@ function renderAssignmentLog() {
     return;
   }
 
-  const rows = data.assignmentLog.slice(-8).reverse().map((entry) => {
-    const assignedAt = new Date(entry.assignedAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
-    return `
-      <div class="list-item">
-        <div>
-          <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
-          <div class="meta">${escapeHtml(entry.systemName || "Removed system")} · ${assignedAt}</div>
-        </div>
-        <span class="status-pill ${entry.status || "available"}">${escapeHtml(entry.statusLabel || "Assigned")}</span>
-      </div>
-    `;
+  elements.activityPanelSection?.classList.toggle("has-open-panel", showQueueDashboard || showRecentAssignments);
+
+  if (elements.recentAssignmentsPanel) {
+    elements.recentAssignmentsPanel.classList.toggle("hidden", !showRecentAssignments);
+  }
+
+  if (elements.toggleRecentAssignmentsButton) {
+    elements.toggleRecentAssignmentsButton.textContent = showRecentAssignments ? "Hide recent tickets" : "Show recent tickets";
+  }
+
+  if (!showRecentAssignments) {
+    elements.assignmentLog.innerHTML = "";
+    return;
+  }
+
+  const rows = getRecentAssignments().map((entry) => {
+    return renderAssignmentListItem(entry, { allowActions: true });
   }).join("");
 
-  elements.assignmentLog.innerHTML = rows || emptyState("No assignments yet.");
+  elements.assignmentLog.innerHTML = rows || emptyState("No assignments in the last 24 hours.");
+  bindAssignmentLogActions();
+}
+
+function buildIncidentHandoffUrl(entry) {
+  const url = new URL(INCIDENT_CREATE_URL);
+  url.searchParams.set("assignee", entry.userName || "");
+  url.searchParams.set("coverage", entry.systemName || "");
+  return url.toString();
+}
+
+function renderAssignmentConfirmation(hasSelectedSystem) {
+  if (!elements.assignmentConfirmation) {
+    return;
+  }
+
+  const entry = lastAssignmentId
+    ? data.assignmentLog.find((assignment) => assignment.id === lastAssignmentId)
+    : null;
+
+  if (!hasSelectedSystem || !entry) {
+    elements.assignmentConfirmation.classList.add("hidden");
+    elements.assignmentConfirmation.innerHTML = "";
+    return;
+  }
+
+  elements.assignmentConfirmation.classList.remove("hidden");
+  elements.assignmentConfirmation.innerHTML = renderAssignmentConfirmationItem(entry);
+}
+
+function renderAssignmentConfirmationItem(entry) {
+  return `
+    <div class="list-item assignment-log-item assignment-confirmation-item">
+      <div>
+        <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
+        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}</div>
+      </div>
+      <div class="assignment-confirmation-actions">
+        <span class="assignment-done-badge">Assigned</span>
+        <a class="primary-button incident-action-link" href="${escapeHtml(buildIncidentHandoffUrl(entry))}">Create incident</a>
+      </div>
+    </div>
+  `;
+}
+
+function renderAssignmentListItem(entry, options = {}) {
+  if (options.allowActions && editingAssignmentId === entry.id) {
+    return renderAssignmentEditor(entry);
+  }
+
+  const assignedAt = formatAssignmentTimestamp(entry);
+  const amendedAt = formatAmendedTimestamp(entry);
+  const amendedText = amendedAt ? ` · Amended ${amendedAt}` : "";
+  const doneBadge = options.showDoneBadge
+    ? "<span class=\"assignment-done-badge\">Assigned</span>"
+    : "";
+  const actions = options.allowActions
+    ? `
+      <div class="item-actions">
+        <button class="small-button" type="button" data-action="edit-assignment" data-assignment-id="${escapeHtml(entry.id)}">Edit</button>
+        <button class="remove-button" type="button" data-action="delete-assignment" data-assignment-id="${escapeHtml(entry.id)}">Delete</button>
+      </div>
+    `
+    : "";
+  return `
+    <div class="list-item assignment-log-item">
+      <div>
+        <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
+        <div class="meta">${escapeHtml(entry.systemName || "Removed system")} · ${escapeHtml(assignedAt)}${escapeHtml(amendedText)}</div>
+      </div>
+      ${doneBadge}
+      ${actions}
+    </div>
+  `;
+}
+
+function renderAssignmentEditor(entry) {
+  const shiftQueueOption = (isShiftOrderPolicy() || entry.systemId === SHIFT_QUEUE_SYSTEM_ID)
+    ? `<option value="${SHIFT_QUEUE_SYSTEM_ID}" ${entry.systemId === SHIFT_QUEUE_SYSTEM_ID ? "selected" : ""}>${SHIFT_QUEUE_SYSTEM_NAME}</option>`
+    : "";
+  const systemOptions = shiftQueueOption + data.systems.map((system) => `
+    <option value="${escapeHtml(system.id)}" ${system.id === entry.systemId ? "selected" : ""}>${escapeHtml(system.name)}</option>
+  `).join("");
+  const userOptions = data.users.map((user) => `
+    <option value="${escapeHtml(user.id)}" ${user.id === entry.userId ? "selected" : ""}>${escapeHtml(user.name)}</option>
+  `).join("");
+
+  return `
+    <form class="list-item assignment-log-item assignment-edit-form" data-assignment-edit-id="${escapeHtml(entry.id)}">
+      <div class="assignment-edit-grid">
+        <label class="field">
+          <span>Queue</span>
+          <select data-edit-field="systemId" required>${systemOptions}</select>
+        </label>
+        <label class="field">
+          <span>User</span>
+          <select data-edit-field="userId" required>${userOptions}</select>
+        </label>
+      </div>
+      <div class="assignment-edit-meta">Original time: ${escapeHtml(formatAssignmentTimestamp(entry))}</div>
+      <div class="item-actions assignment-edit-actions">
+        <button class="primary-button" type="submit">Save</button>
+        <button class="secondary-button" type="button" data-action="cancel-assignment-edit">Cancel</button>
+        <button class="remove-button" type="button" data-action="delete-assignment" data-assignment-id="${escapeHtml(entry.id)}">Delete</button>
+      </div>
+    </form>
+  `;
+}
+
+function bindAssignmentLogActions() {
+  if (!elements.assignmentLog) {
+    return;
+  }
+
+  elements.assignmentLog.querySelectorAll("[data-action='edit-assignment']").forEach((button) => {
+    button.addEventListener("click", () => {
+      editingAssignmentId = button.dataset.assignmentId;
+      renderAssignmentLog();
+    });
+  });
+
+  elements.assignmentLog.querySelectorAll("[data-action='cancel-assignment-edit']").forEach((button) => {
+    button.addEventListener("click", () => {
+      editingAssignmentId = null;
+      renderAssignmentLog();
+    });
+  });
+
+  elements.assignmentLog.querySelectorAll("[data-action='delete-assignment']").forEach((button) => {
+    button.addEventListener("click", () => deleteAssignment(button.dataset.assignmentId));
+  });
+
+  elements.assignmentLog.querySelectorAll("[data-assignment-edit-id]").forEach((form) => {
+    form.addEventListener("submit", saveAmendedAssignment);
+  });
+}
+
+function formatAssignmentTimestamp(entry) {
+  return entry.easternDate && entry.easternTime
+    ? formatEasternDateTimeForDisplay(entry.easternDate, entry.easternTime)
+    : formatInstantDateTimeForDisplay(new Date(entry.assignedAt));
+}
+
+function formatAmendedTimestamp(entry) {
+  if (!entry.amendedAt) {
+    return "";
+  }
+
+  return formatInstantDateTimeForDisplay(new Date(entry.amendedAt));
+}
+
+function toggleRecentAssignments() {
+  showRecentAssignments = !showRecentAssignments;
+  renderAssignmentLog();
+}
+
+function saveAmendedAssignment(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const entry = data.assignmentLog.find((assignment) => assignment.id === form.dataset.assignmentEditId);
+  if (!entry) {
+    return;
+  }
+
+  const system = getAssignmentSystemById(getAssignmentEditValue(form, "systemId"));
+  const user = data.users.find((item) => item.id === getAssignmentEditValue(form, "userId"));
+  if (!system || !user) {
+    window.alert("Choose a valid queue and user.");
+    return;
+  }
+
+  entry.systemId = system.id;
+  entry.systemName = system.name;
+  entry.userId = user.id;
+  entry.userName = user.name;
+  entry.amendedAt = new Date().toISOString();
+  editingAssignmentId = null;
+  lastAssignmentId = entry.id;
+  completeDataSave("Assignment updated.", { showToast: true });
+}
+
+function getAssignmentEditValue(form, fieldName) {
+  return form.querySelector(`[data-edit-field="${fieldName}"]`)?.value || "";
+}
+
+function deleteAssignment(assignmentId) {
+  const entry = data.assignmentLog.find((assignment) => assignment.id === assignmentId);
+  if (!entry || !window.confirm("Delete this ticket assignment?")) {
+    return;
+  }
+
+  data.assignmentLog = data.assignmentLog.filter((assignment) => assignment.id !== assignmentId);
+  if (lastAssignmentId === assignmentId) {
+    lastAssignmentId = null;
+  }
+  editingAssignmentId = null;
+  completeDataSave("Assignment deleted.", { showToast: true });
+}
+
+function toggleQueueDashboard() {
+  showQueueDashboard = !showQueueDashboard;
+  renderClockAndAssignment();
+}
+
+function openDashboardSystem(systemId) {
+  if (!elements.assignmentSystemSelect) {
+    return;
+  }
+
+  elements.assignmentSystemSelect.value = systemId;
+  selectedAssigneeId = null;
+  lastAssignmentId = null;
+  renderClockAndAssignment();
+  elements.queueSection?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderUsers() {
@@ -599,24 +1631,28 @@ function renderUsers() {
     return;
   }
 
-  const rows = data.users.map((user) => {
-    const scheduleCount = user.schedules.length;
-    const coverageCount = data.systems.filter((system) => system.primaryUserIds.includes(user.id)).length;
-    const holidayCount = data.holidays.filter((holiday) => holiday.userId === user.id).length;
+  const rows = data.users.map((user, index) => {
+    const moveUpDisabled = index === 0 ? "disabled" : "";
+    const moveDownDisabled = index === data.users.length - 1 ? "disabled" : "";
     return `
-      <div class="list-item">
-        <div>
+      <div class="list-item team-member-row">
+        <div class="team-rank">#${index + 1}</div>
+        <div class="team-member-main">
           <div class="item-title">${escapeHtml(user.name)}</div>
-          <div class="meta">${scheduleCount} schedule block${scheduleCount === 1 ? "" : "s"} · ${coverageCount} system/app${coverageCount === 1 ? "" : "s"} · ${holidayCount} holiday${holidayCount === 1 ? "" : "s"}</div>
         </div>
-        <div class="item-actions">
-          <button class="remove-button" type="button" data-action="remove-user" data-user-id="${escapeHtml(user.id)}">Remove</button>
+        <div class="item-actions team-member-actions">
+          <button class="small-button hierarchy-button" type="button" data-action="move-team-user" data-user-id="${escapeHtml(user.id)}" data-direction="-1" aria-label="Move ${escapeHtml(user.name)} up" ${moveUpDisabled}>↑</button>
+          <button class="small-button hierarchy-button" type="button" data-action="move-team-user" data-user-id="${escapeHtml(user.id)}" data-direction="1" aria-label="Move ${escapeHtml(user.name)} down" ${moveDownDisabled}>↓</button>
+          <button class="remove-button team-remove-button" type="button" data-action="remove-user" data-user-id="${escapeHtml(user.id)}">Remove</button>
         </div>
       </div>
     `;
   }).join("");
 
   elements.usersList.innerHTML = rows || emptyState("Add your first user.");
+  elements.usersList.querySelectorAll("[data-action='move-team-user']").forEach((button) => {
+    button.addEventListener("click", () => moveTeamUser(button.dataset.userId, Number(button.dataset.direction)));
+  });
   elements.usersList.querySelectorAll("[data-action='remove-user']").forEach((button) => {
     button.addEventListener("click", () => removeUser(button.dataset.userId));
   });
@@ -627,9 +1663,9 @@ function renderDayCheckboxes() {
     return;
   }
 
-  elements.dayCheckboxes.innerHTML = DAYS.map((day) => `
-    <label class="check-row">
-      <input type="checkbox" value="${day}" ${["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].includes(day) ? "checked" : ""}>
+  elements.dayCheckboxes.innerHTML = SCHEDULE_DAYS.map((day) => `
+    <label class="day-chip">
+      <input type="checkbox" value="${day}" checked>
       <span>${day.slice(0, 3)}</span>
     </label>
   `).join("");
@@ -642,6 +1678,7 @@ function renderTimelineTools() {
 
   updateGraphDateCopy();
   renderTimeline();
+  renderTimelineDraftActions();
   renderSlots();
 }
 
@@ -651,12 +1688,6 @@ function updateGraphDateCopy() {
   if (elements.graphDateLabel) {
     elements.graphDateLabel.textContent = isWeekView ? "Week containing date" : "Schedule date";
   }
-
-  if (elements.graphDateHelp) {
-    elements.graphDateHelp.textContent = isWeekView
-      ? "Week view shows the Monday–Sunday week containing this date. Click a day cell to prefill that user/day."
-      : "Day view shows this exact date. Click a user row to prefill a 30-minute schedule.";
-  }
 }
 
 function renderTimeline() {
@@ -665,7 +1696,7 @@ function renderTimeline() {
   }
 
   const date = elements.timelineDateInput.value || getEasternNow().date;
-  const view = elements.scheduleViewSelect?.value || "day";
+  const view = elements.scheduleViewSelect?.value || "week";
 
   if (view === "week") {
     renderWeekScheduleGraph(date);
@@ -677,25 +1708,17 @@ function renderTimeline() {
 
 function renderDayScheduleGraph(date) {
   const rows = getSortedGraphUserRowsForDate(date).map(({ user, graphBlocks }) => {
-    const coveredScheduleIds = new Set(
-      graphBlocks
-        .filter((block) => isScheduleCovered(block, graphBlocks))
-        .map((block) => block.id)
-    );
-    const labels = graphBlocks
-      .filter((block) => coveredScheduleIds.has(block.id))
-      .map((block) => graphFloatingLabel(block))
-      .join("");
     const blocks = graphBlocks
-      .map((block) => graphBlock(block, { hideLabel: coveredScheduleIds.has(block.id) }))
+      .map((block) => graphBlock(block))
       .join("");
-    const laneClass = coveredScheduleIds.size > 0 ? "graph-lane has-floating-labels" : "graph-lane";
+    const draft = graphDraftBlock(user.id, date);
+    const laneClass = draft ? "graph-lane has-draft" : "graph-lane";
 
     return `
       <div class="graph-row">
         <div class="graph-user">${escapeHtml(user.name)}</div>
         <div class="${laneClass}" data-user-id="${escapeHtml(user.id)}" data-date="${escapeHtml(date)}">
-          ${labels}${blocks || "<span class=\"graph-empty\">Click to add</span>"}
+          ${blocks}${draft || (!blocks ? "<span class=\"graph-empty\">+</span>" : "")}
         </div>
       </div>
     `;
@@ -703,14 +1726,23 @@ function renderDayScheduleGraph(date) {
 
   elements.timelineCanvas.className = "schedule-graph day-graph";
   elements.timelineCanvas.innerHTML = `
-    <div class="graph-time-axis">
-      <span>06:00</span><span>08:00</span><span>10:00</span><span>12:00</span><span>14:00</span><span>16:00</span><span>18:00</span><span>20:00</span><span>22:00</span>
-    </div>
+    ${renderGraphTimeAxis(date)}
     ${rows || emptyState("Add users before viewing schedules.")}
   `;
 }
 
+function renderGraphTimeAxis(date) {
+  const axisLabels = Array.from({ length: 9 }, (_, index) => {
+    const easternTime = minutesToTime(TIMELINE_START_MINUTES + index * 120);
+    return `<span>${escapeHtml(formatEasternTimeInputForDisplay(date, easternTime))}</span>`;
+  }).join("");
+
+  return `<div class="graph-time-axis">${axisLabels}</div>`;
+}
+
 function renderWeekScheduleGraph(date) {
+  timelineDrafts = [];
+  renderTimelineDraftActions();
   const weekDates = getWeekDates(date);
   const header = weekDates.map((weekDate) => `
     <div class="week-header-cell">
@@ -763,6 +1795,7 @@ function getGraphBlocksForUser(user, date, day) {
       type: window.source === "extra" ? "extra" : "schedule",
       id: window.id,
       userId: user.id,
+      date,
       start: window.start,
       end: window.end,
       priority: window.priority,
@@ -775,6 +1808,7 @@ function getGraphBlocksForUser(user, date, day) {
       type: "break",
       id: slot.id,
       userId: user.id,
+      date,
       start: slot.start,
       end: slot.end,
       label: slot.reason || "Break"
@@ -847,12 +1881,6 @@ function compareGraphSortKeys(left, right) {
   return 0;
 }
 
-function isScheduleCovered(block, blocks) {
-  return block.type === "schedule" && blocks.some((otherBlock) => (
-    ["break", "extra"].includes(otherBlock.type) && graphBlocksOverlap(block, otherBlock)
-  ));
-}
-
 function graphBlocksOverlap(leftBlock, rightBlock) {
   return toMinutes(leftBlock.start) < toMinutes(rightBlock.end) && toMinutes(rightBlock.start) < toMinutes(leftBlock.end);
 }
@@ -862,23 +1890,28 @@ function renderSlots() {
     return;
   }
 
+  const today = getEasternNow().date;
   const rows = data.exceptions
     .slice()
+    .filter((slot) => isValidDateInput(slot.date || "") && slot.date >= today)
     .sort((left, right) => `${left.date} ${left.start}`.localeCompare(`${right.date} ${right.start}`))
     .map((slot) => {
       const user = data.users.find((item) => item.id === slot.userId);
+      const abbreviation = getSelectedTimezoneAbbreviationForDate(slot.date);
+      const start = formatEasternTimeInputForDisplay(slot.date, slot.start);
+      const end = formatEasternTimeInputForDisplay(slot.date, slot.end);
       return `
         <div class="list-item">
           <div>
-            <div class="item-title">${escapeHtml(user?.name || "Removed user")} · ${slot.type === "break" ? "Break" : "Extra coverage"}</div>
-            <div class="meta">${slot.date} · ${slot.start}–${slot.end} ET${slot.reason ? ` · ${escapeHtml(slot.reason)}` : ""}</div>
+            <div class="item-title">${escapeHtml(slot.reason || "No comment")}</div>
+            <div class="meta">${escapeHtml(user?.name || "Removed user")} · ${formatDisplayDate(slot.date)} · ${start}–${end} ${escapeHtml(abbreviation)}</div>
           </div>
           <button class="remove-button" type="button" data-action="remove-slot" data-slot-id="${escapeHtml(slot.id)}">Remove</button>
         </div>
       `;
     }).join("");
 
-  elements.slotsList.innerHTML = rows || emptyState("No breaks or extra slots.");
+  elements.slotsList.innerHTML = rows || emptyState("No current or upcoming breaks or extra slots.");
   elements.slotsList.querySelectorAll("[data-action='remove-slot']").forEach((button) => {
     button.addEventListener("click", () => removeTimelineSlot(button.dataset.slotId));
   });
@@ -897,20 +1930,22 @@ function renderSystems() {
       }
 
       return `
-        <div class="list-item">
-          <div>
-            <div class="item-title">#${index + 1} ${escapeHtml(user.name)}</div>
+        <div class="coverage-priority-row">
+          <div class="priority-badge">#${index + 1}</div>
+          <div class="priority-person">
+            <div class="item-title">${escapeHtml(user.name)}</div>
+            <div class="meta">Queue priority</div>
           </div>
           <div class="item-actions">
-            <button class="small-button" type="button" data-action="move-user" data-system-id="${escapeHtml(system.id)}" data-user-id="${escapeHtml(user.id)}" data-direction="-1">Up</button>
-            <button class="small-button" type="button" data-action="move-user" data-system-id="${escapeHtml(system.id)}" data-user-id="${escapeHtml(user.id)}" data-direction="1">Down</button>
+            <button class="small-button priority-move-button" type="button" data-action="move-user" data-system-id="${escapeHtml(system.id)}" data-user-id="${escapeHtml(user.id)}" data-direction="-1" aria-label="Move ${escapeHtml(user.name)} up">↑</button>
+            <button class="small-button priority-move-button" type="button" data-action="move-user" data-system-id="${escapeHtml(system.id)}" data-user-id="${escapeHtml(user.id)}" data-direction="1" aria-label="Move ${escapeHtml(user.name)} down">↓</button>
           </div>
         </div>
       `;
     }).join("");
 
     const coverageRows = data.users.map((user) => `
-      <label class="check-row">
+      <label class="coverage-chip">
         <input type="checkbox" data-action="toggle-coverage" data-system-id="${escapeHtml(system.id)}" data-user-id="${escapeHtml(user.id)}" ${system.primaryUserIds.includes(user.id) ? "checked" : ""}>
         <span>${escapeHtml(user.name)}</span>
       </label>
@@ -918,15 +1953,20 @@ function renderSystems() {
 
     return `
       <article class="system-card">
-        <div class="section-heading">
+        <div class="system-card-header">
           <div>
             <h3>${escapeHtml(system.name)}</h3>
-            <p class="help-text">${system.primaryUserIds.length} primary SME${system.primaryUserIds.length === 1 ? "" : "s"} assigned</p>
           </div>
-          <button class="remove-button" type="button" data-action="remove-system" data-system-id="${escapeHtml(system.id)}">Remove system</button>
+          <button class="remove-button subtle-danger" type="button" data-action="remove-system" data-system-id="${escapeHtml(system.id)}">Remove</button>
         </div>
-        <div class="coverage-grid">${coverageRows || emptyState("Add users first.")}</div>
-        <div class="stack-list compact">${assignedRows || emptyState("No primary SMEs assigned.")}</div>
+        <div class="coverage-section">
+          <div class="coverage-section-label">Team</div>
+          <div class="coverage-grid">${coverageRows || emptyState("Add users first.")}</div>
+        </div>
+        <div class="coverage-section">
+          <div class="coverage-section-label">Priority order</div>
+          <div class="coverage-priority-list">${assignedRows || emptyState("No SMEs assigned.")}</div>
+        </div>
       </article>
     `;
   }).join("");
@@ -952,14 +1992,12 @@ function renderHolidays() {
     .slice()
     .sort((left, right) => left.date.localeCompare(right.date))
     .map((holiday) => {
-      const userName = holiday.userId === GLOBAL_HOLIDAY_USER_ID
-        ? "All users"
-        : data.users.find((user) => user.id === holiday.userId)?.name || "Removed user";
+      const userName = getHolidayUserName(holiday);
       return `
         <div class="list-item">
           <div>
             <div class="item-title">${escapeHtml(userName)}</div>
-            <div class="meta">${holiday.date} · ${escapeHtml(holiday.name || "Holiday")}</div>
+            <div class="meta">${escapeHtml(formatHolidayDate(holiday.date))} · ${escapeHtml(holiday.name || "Holiday")}</div>
           </div>
           <button class="remove-button" type="button" data-action="remove-holiday" data-holiday-id="${escapeHtml(holiday.id)}">Remove</button>
         </div>
@@ -987,7 +2025,7 @@ function saveAssignmentRules(event) {
   }
 
   data.assignmentRules = {
-    preset: getAssignmentRulePreset(elements.assignmentPolicySelect.value).id
+    preset: getAssignmentRulePreset(selectedAssignmentPolicyId || data.assignmentRules?.preset).id
   };
   completeAdminSave("Assignment rules saved.", "rules");
 }
@@ -999,13 +2037,17 @@ function addShiftTemplate(event) {
   }
 
   const name = elements.shiftNameInput.value.trim();
-  const start = elements.shiftStartInput.value;
-  const end = elements.shiftEndInput.value;
+  const displayStart = elements.shiftStartInput.value;
+  const displayEnd = elements.shiftEndInput.value;
 
-  if (!name || !isValidTimeRange(start, end)) {
+  if (!name || !isValidTimeRange(displayStart, displayEnd)) {
     window.alert("Add a shift name and valid start/end times.");
     return;
   }
+
+  const date = getScheduleReferenceDate();
+  const start = convertDisplayDateTimeToEastern(date, displayStart).time;
+  const end = convertDisplayDateTimeToEastern(date, displayEnd).time;
 
   data.shiftTemplates.push({
     id: makeId(name, data.shiftTemplates.map((template) => template.id)),
@@ -1014,10 +2056,9 @@ function addShiftTemplate(event) {
     end
   });
 
-  elements.addShiftForm.reset();
-  elements.shiftStartInput.value = "09:00";
-  elements.shiftEndInput.value = "17:00";
-  completeAdminSave("Shift preset saved.", "shifts");
+  shiftAddFormOpen = false;
+  resetShiftAddForm();
+  completeAdminSave("Shift saved.", "shifts");
 }
 
 function updateShiftTemplate(shiftId) {
@@ -1032,18 +2073,19 @@ function updateShiftTemplate(shiftId) {
   }
 
   const name = row.querySelector(".shift-name-field").value.trim();
-  const start = row.querySelector(".shift-start-field").value;
-  const end = row.querySelector(".shift-end-field").value;
+  const displayStart = row.querySelector(".shift-start-field").value;
+  const displayEnd = row.querySelector(".shift-end-field").value;
 
-  if (!name || !isValidTimeRange(start, end)) {
-    window.alert("Shift presets need a name and valid start/end times.");
+  if (!name || !isValidTimeRange(displayStart, displayEnd)) {
+    window.alert("Shifts need a name and valid start/end times.");
     return;
   }
 
+  const date = getScheduleReferenceDate();
   template.name = name;
-  template.start = start;
-  template.end = end;
-  completeAdminSave("Shift preset saved.", "shifts");
+  template.start = convertDisplayDateTimeToEastern(date, displayStart).time;
+  template.end = convertDisplayDateTimeToEastern(date, displayEnd).time;
+  completeAdminSave("Shift saved.", "shifts");
 }
 
 function removeShiftTemplate(shiftId) {
@@ -1052,10 +2094,56 @@ function removeShiftTemplate(shiftId) {
   }
 
   const template = data.shiftTemplates.find((item) => item.id === shiftId);
-  if (!template || !window.confirm(`Remove ${template.name}? Existing schedules using it will become custom schedules.`)) {
+  if (!template) {
     return;
   }
 
+  openRemoveShiftModal(template);
+}
+
+function openRemoveShiftModal(template) {
+  if (!elements.removeShiftModal) {
+    performRemoveShiftTemplate(template.id);
+    return;
+  }
+
+  pendingRemoveShiftId = template.id;
+  if (elements.removeShiftModalName) {
+    const date = getScheduleReferenceDate();
+    const abbreviation = getSelectedTimezoneAbbreviationForDate(date);
+    elements.removeShiftModalName.textContent = `${template.name} · ${formatEasternTimeInputForDisplay(date, template.start)}–${formatEasternTimeInputForDisplay(date, template.end)} ${abbreviation}`;
+  }
+  if (elements.removeShiftModalImpact) {
+    elements.removeShiftModalImpact.textContent = getRemoveShiftImpactText(template);
+  }
+
+  elements.removeShiftModal.classList.remove("hidden");
+  elements.removeShiftModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.cancelRemoveShiftButton?.focus(), 0);
+}
+
+function closeRemoveShiftModal() {
+  pendingRemoveShiftId = null;
+  if (!elements.removeShiftModal) {
+    return;
+  }
+
+  elements.removeShiftModal.classList.add("hidden");
+  elements.removeShiftModal.setAttribute("aria-hidden", "true");
+}
+
+function confirmRemoveShift() {
+  if (!pendingRemoveShiftId || !isAdminTabUnlocked("shifts")) {
+    closeRemoveShiftModal();
+    return;
+  }
+
+  const shiftId = pendingRemoveShiftId;
+  closeRemoveShiftModal();
+  performRemoveShiftTemplate(shiftId);
+}
+
+function performRemoveShiftTemplate(shiftId) {
   data.shiftTemplates = data.shiftTemplates.filter((item) => item.id !== shiftId);
   data.users.forEach((user) => {
     user.schedules.forEach((schedule) => {
@@ -1064,7 +2152,17 @@ function removeShiftTemplate(shiftId) {
       }
     });
   });
-  completeAdminSave("Shift preset removed.", "shifts");
+  completeAdminSave("Shift removed.", "shifts");
+}
+
+function getRemoveShiftImpactText(template) {
+  const affectedSchedules = data.users.reduce((count, user) => (
+    count + user.schedules.filter((schedule) => schedule.shiftType === template.id).length
+  ), 0);
+
+  return affectedSchedules === 0
+    ? "No existing schedules use this shift."
+    : `${affectedSchedules} existing schedule${affectedSchedules === 1 ? "" : "s"} will keep their times and become custom schedules.`;
 }
 
 function addUser(event) {
@@ -1094,7 +2192,56 @@ function removeUser(userId) {
   }
 
   const user = data.users.find((item) => item.id === userId);
-  if (!user || !window.confirm(`Remove ${user.name}? This also removes their schedules, breaks, holidays, and coverage.`)) {
+  if (!user) {
+    return;
+  }
+
+  openRemoveUserModal(user);
+}
+
+function openRemoveUserModal(user) {
+  if (!elements.removeUserModal) {
+    performRemoveUser(user.id);
+    return;
+  }
+
+  pendingRemoveUserId = user.id;
+  if (elements.removeUserModalName) {
+    elements.removeUserModalName.textContent = user.name;
+  }
+  if (elements.removeUserModalImpact) {
+    elements.removeUserModalImpact.textContent = getRemoveUserImpactText(user);
+  }
+
+  elements.removeUserModal.classList.remove("hidden");
+  elements.removeUserModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.cancelRemoveUserButton?.focus(), 0);
+}
+
+function closeRemoveUserModal() {
+  pendingRemoveUserId = null;
+  if (!elements.removeUserModal) {
+    return;
+  }
+
+  elements.removeUserModal.classList.add("hidden");
+  elements.removeUserModal.setAttribute("aria-hidden", "true");
+}
+
+function confirmRemoveUser() {
+  if (!pendingRemoveUserId || !isAdminTabUnlocked("users")) {
+    closeRemoveUserModal();
+    return;
+  }
+
+  const userId = pendingRemoveUserId;
+  closeRemoveUserModal();
+  performRemoveUser(userId);
+}
+
+function performRemoveUser(userId) {
+  const user = data.users.find((item) => item.id === userId);
+  if (!user) {
     return;
   }
 
@@ -1109,14 +2256,63 @@ function removeUser(userId) {
   completeAdminSave("User removed.", "users");
 }
 
+function getRemoveUserImpactText(user) {
+  const scheduleCount = user.schedules.length;
+  const slotCount = data.exceptions.filter((slot) => slot.userId === user.id).length;
+  const holidayCount = data.holidays.filter((holiday) => holiday.userId === user.id).length;
+  const coverageCount = data.systems.filter((system) => system.primaryUserIds.includes(user.id)).length;
+  const impact = [
+    `${scheduleCount} schedule${scheduleCount === 1 ? "" : "s"}`,
+    `${slotCount} break/extra slot${slotCount === 1 ? "" : "s"}`,
+    `${holidayCount} holiday${holidayCount === 1 ? "" : "s"}`,
+    `${coverageCount} coverage mapping${coverageCount === 1 ? "" : "s"}`
+  ].join(", ");
+
+  return `This will remove ${impact}. Existing ticket history remains visible.`;
+}
+
+function moveTeamUser(userId, direction) {
+  if (!isAdminTabUnlocked("users")) {
+    return;
+  }
+
+  const currentIndex = data.users.findIndex((user) => user.id === userId);
+  const nextIndex = currentIndex + direction;
+  if (currentIndex < 0 || nextIndex < 0 || nextIndex >= data.users.length) {
+    return;
+  }
+
+  const [user] = data.users.splice(currentIndex, 1);
+  data.users.splice(nextIndex, 0, user);
+  completeAdminSave("Team hierarchy updated.", "users");
+}
+
 function applyShiftTemplate() {
   const template = getShiftTemplate(elements.shiftTemplateSelect.value);
   if (!template || elements.shiftTemplateSelect.value === "custom") {
     return;
   }
 
-  elements.scheduleStartInput.value = template.start;
-  elements.scheduleEndInput.value = template.end;
+  const date = getScheduleReferenceDate();
+  elements.scheduleStartInput.value = formatEasternTimeInputForDisplay(date, template.start);
+  elements.scheduleEndInput.value = formatEasternTimeInputForDisplay(date, template.end);
+}
+
+function renderScheduleFormMode() {
+  const isEditing = Boolean(editingSchedule);
+  if (elements.scheduleFormTitle) {
+    elements.scheduleFormTitle.textContent = isEditing ? "Update schedule" : "Add schedule";
+  }
+  if (elements.scheduleSubmitButton) {
+    elements.scheduleSubmitButton.textContent = isEditing ? "Update schedule" : "Add schedule";
+  }
+  elements.cancelScheduleEditButton?.classList.toggle("hidden", !isEditing);
+}
+
+function cancelScheduleEdit() {
+  editingSchedule = null;
+  syncScheduleDateRangeToGraphWeek();
+  renderScheduleFormMode();
 }
 
 function addSchedule(event) {
@@ -1133,8 +2329,29 @@ function addSchedule(event) {
     return;
   }
 
-  if (!isValidTimeRange(elements.scheduleStartInput.value, elements.scheduleEndInput.value)) {
+  const displayStart = elements.scheduleStartInput.value;
+  const displayEnd = elements.scheduleEndInput.value;
+  if (!isValidTimeRange(displayStart, displayEnd)) {
     window.alert("Schedule start and end cannot be the same.");
+    return;
+  }
+
+  const date = getScheduleReferenceDate();
+  const start = convertDisplayDateTimeToEastern(date, displayStart).time;
+  const end = convertDisplayDateTimeToEastern(date, displayEnd).time;
+  const dateRange = getScheduleDateRangeFromForm();
+  if (!dateRange) {
+    return;
+  }
+
+  if (editingSchedule) {
+    updateSchedule(user, days, start, end, dateRange);
+    return;
+  }
+
+  const conflictDays = getScheduleDayConflicts(user, days, dateRange);
+  if (conflictDays.length > 0) {
+    window.alert(formatScheduleConflictMessage(user, conflictDays));
     return;
   }
 
@@ -1142,22 +2359,212 @@ function addSchedule(event) {
     id: makeRecordId("schedule"),
     shiftType: elements.shiftTemplateSelect.value,
     days,
-    start: elements.scheduleStartInput.value,
-    end: elements.scheduleEndInput.value,
-    priority: Number(elements.schedulePriorityInput.value)
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+    start,
+    end
   });
 
   completeAdminSave("Schedule saved.");
 }
 
-function removeSchedule(userId, scheduleId) {
+function updateSchedule(user, days, start, end, dateRange) {
+  const originalUser = data.users.find((item) => item.id === editingSchedule.userId);
+  const schedule = originalUser?.schedules.find((item) => item.id === editingSchedule.scheduleId);
+  if (!schedule) {
+    editingSchedule = null;
+    renderScheduleFormMode();
+    window.alert("This schedule no longer exists.");
+    return;
+  }
+
+  const ignoredScheduleId = user.id === originalUser.id ? schedule.id : null;
+  const conflictDays = getScheduleDayConflicts(user, days, dateRange, ignoredScheduleId);
+  if (conflictDays.length > 0) {
+    window.alert(formatScheduleConflictMessage(user, conflictDays));
+    return;
+  }
+
+  const updatedSchedule = {
+    ...schedule,
+    shiftType: elements.shiftTemplateSelect.value,
+    days,
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+    start,
+    end
+  };
+
+  if (user.id === originalUser.id) {
+    Object.assign(schedule, updatedSchedule);
+  } else {
+    originalUser.schedules = originalUser.schedules.filter((item) => item.id !== schedule.id);
+    user.schedules.push(updatedSchedule);
+  }
+
+  editingSchedule = null;
+  completeAdminSave("Schedule updated.");
+}
+
+function getScheduleDateRangeFromForm() {
+  normalizeScheduleDateRangeInputs("start");
+  const startDate = elements.scheduleStartDateInput?.value || "";
+  const endDate = elements.scheduleEndDateInput?.value || "";
+  if (!isValidDateInput(startDate) || !isValidDateInput(endDate)) {
+    window.alert("Choose valid schedule dates.");
+    return null;
+  }
+
+  return { startDate, endDate };
+}
+
+function removeSchedule(userId, scheduleId, date = getScheduleReferenceDate()) {
+  const user = data.users.find((item) => item.id === userId);
+  if (!user) {
+    return;
+  }
+
+  const schedule = user.schedules.find((item) => item.id === scheduleId);
+  if (!schedule) {
+    return;
+  }
+
+  openRemoveScheduleModal(user, schedule, date);
+}
+
+function openRemoveScheduleModal(user, schedule, date) {
+  if (!elements.removeScheduleModal) {
+    performRemoveScheduleDay(user.id, schedule.id, date);
+    return;
+  }
+
+  pendingRemoveSchedule = { userId: user.id, scheduleId: schedule.id, date };
+  const scheduleDayCount = Array.isArray(schedule.days) ? schedule.days.length : 0;
+  const hasMultipleDays = scheduleDayCount > 1;
+  if (elements.removeScheduleModalName) {
+    elements.removeScheduleModalName.textContent = formatRemoveScheduleName(user, schedule, date);
+  }
+  if (elements.removeScheduleModalImpact) {
+    const day = getDayNameFromDate(date);
+    const days = getScheduleDaySummary(schedule);
+    elements.removeScheduleModalImpact.textContent = hasMultipleDays
+      ? `${day} only removes that weekday from this saved schedule. Remove schedule removes the full saved date range across ${days}. Existing ticket history stays unchanged.`
+      : "This removes the saved schedule. Existing ticket history stays unchanged.";
+  }
+  if (elements.removeScheduleDayButton) {
+    elements.removeScheduleDayButton.textContent = `Remove ${getDayNameFromDate(date).slice(0, 3)} only`;
+    elements.removeScheduleDayButton.classList.toggle("hidden", !hasMultipleDays);
+  }
+  if (elements.removeScheduleAllButton) {
+    elements.removeScheduleAllButton.textContent = hasMultipleDays
+      ? "Remove schedule"
+      : "Remove schedule";
+  }
+
+  elements.removeScheduleModal.classList.remove("hidden");
+  elements.removeScheduleModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.cancelRemoveScheduleButton?.focus(), 0);
+}
+
+function closeRemoveScheduleModal() {
+  pendingRemoveSchedule = null;
+  if (!elements.removeScheduleModal) {
+    return;
+  }
+
+  elements.removeScheduleModal.classList.add("hidden");
+  elements.removeScheduleModal.setAttribute("aria-hidden", "true");
+}
+
+function confirmRemoveScheduleDay() {
+  if (!pendingRemoveSchedule) {
+    closeRemoveScheduleModal();
+    return;
+  }
+
+  const { userId, scheduleId, date } = pendingRemoveSchedule;
+  closeRemoveScheduleModal();
+  performRemoveScheduleDay(userId, scheduleId, date);
+}
+
+function confirmRemoveScheduleAll() {
+  if (!pendingRemoveSchedule) {
+    closeRemoveScheduleModal();
+    return;
+  }
+
+  const { userId, scheduleId } = pendingRemoveSchedule;
+  closeRemoveScheduleModal();
+  performRemoveScheduleAll(userId, scheduleId);
+}
+
+function performRemoveScheduleDay(userId, scheduleId, date) {
+  const user = data.users.find((item) => item.id === userId);
+  if (!user) {
+    return;
+  }
+
+  const schedule = user.schedules.find((item) => item.id === scheduleId);
+  if (!schedule) {
+    return;
+  }
+
+  const day = getDayNameFromDate(date);
+  schedule.days = Array.isArray(schedule.days)
+    ? schedule.days.filter((item) => item !== day)
+    : [];
+
+  if (schedule.days.length === 0) {
+    user.schedules = user.schedules.filter((item) => item.id !== scheduleId);
+  }
+  clearScheduleEditIfNeeded(scheduleId);
+
+  completeAdminSave("Schedule updated.");
+}
+
+function performRemoveScheduleAll(userId, scheduleId) {
   const user = data.users.find((item) => item.id === userId);
   if (!user) {
     return;
   }
 
   user.schedules = user.schedules.filter((schedule) => schedule.id !== scheduleId);
+  clearScheduleEditIfNeeded(scheduleId);
   completeAdminSave("Schedule removed.");
+}
+
+function clearScheduleEditIfNeeded(scheduleId) {
+  if (editingSchedule?.scheduleId === scheduleId) {
+    editingSchedule = null;
+  }
+}
+
+function formatRemoveScheduleName(user, schedule, date) {
+  const abbreviation = getSelectedTimezoneAbbreviationForDate(date);
+  const start = formatEasternTimeInputForDisplay(date, schedule.start);
+  const end = formatEasternTimeInputForDisplay(date, schedule.end);
+  const days = getScheduleDaySummary(schedule);
+  return `${user.name} · ${getScheduleDateRangeSummary(schedule)} · ${days} · ${start}–${end} ${abbreviation}`;
+}
+
+function getScheduleDaySummary(schedule) {
+  return Array.isArray(schedule.days) && schedule.days.length > 0
+    ? schedule.days.map((day) => day.slice(0, 3)).join(", ")
+    : "No days";
+}
+
+function getScheduleDateRangeSummary(schedule) {
+  const startDate = getScheduleStartDate(schedule);
+  const endDate = getScheduleEndDate(schedule);
+  if (startDate === "0001-01-01" && endDate === "9999-12-31") {
+    return "All dates";
+  }
+
+  if (startDate === endDate) {
+    return formatDisplayDate(startDate);
+  }
+
+  return `${formatDisplayDate(startDate)}–${formatDisplayDate(endDate)}`;
 }
 
 function addTimelineSlot(event) {
@@ -1168,7 +2575,9 @@ function addTimelineSlot(event) {
     return;
   }
 
-  if (!isValidTimeRange(elements.slotStartInput.value, elements.slotEndInput.value)) {
+  const displayStart = elements.slotStartInput.value;
+  const displayEnd = elements.slotEndInput.value;
+  if (!isValidTimeRange(displayStart, displayEnd)) {
     window.alert("Slot start and end cannot be the same.");
     return;
   }
@@ -1178,18 +2587,37 @@ function addTimelineSlot(event) {
     return;
   }
 
+  const reason = elements.slotReasonInput.value.trim();
+  if (!reason) {
+    window.alert("Add a comment.");
+    return;
+  }
+
+  const start = convertDisplayDateTimeToEastern(elements.slotDateInput.value, displayStart);
+  const end = convertDisplayDateTimeToEastern(elements.slotDateInput.value, displayEnd);
   data.exceptions.push({
     id: makeRecordId("slot"),
     userId: user.id,
-    date: elements.slotDateInput.value,
-    type: elements.slotTypeSelect.value,
-    start: elements.slotStartInput.value,
-    end: elements.slotEndInput.value,
-    reason: elements.slotReasonInput.value.trim()
+    date: start.date,
+    type: inferTimelineSlotType(user, start.date, start.time, end.time),
+    start: start.time,
+    end: end.time,
+    reason
   });
 
   elements.slotReasonInput.value = "";
   completeAdminSave("Timeline slot saved.");
+}
+
+function inferTimelineSlotType(user, date, start, end) {
+  const day = getDayNameFromDate(date);
+  const overlapsSchedule = user.schedules.some((schedule) => (
+    isScheduleActiveOnDate(schedule, date, day)
+      && isValidTimeRange(schedule.start, schedule.end)
+      && graphBlocksOverlap({ start, end }, schedule)
+  ));
+
+  return overlapsSchedule ? "break" : "extra";
 }
 
 function removeTimelineSlot(slotId) {
@@ -1197,10 +2625,301 @@ function removeTimelineSlot(slotId) {
   completeAdminSave("Timeline slot removed.");
 }
 
+function startTimelineDraft(event) {
+  if (elements.scheduleViewSelect?.value === "week" || event.button !== 0 || event.target.closest("button")) {
+    return;
+  }
+
+  const lane = event.target.closest(".graph-lane");
+  if (!lane) {
+    return;
+  }
+
+  event.preventDefault();
+  const pointerMinutes = getTimelineMinutesFromPointer(lane, event.clientX);
+  const isDraftTarget = Boolean(event.target.closest(".graph-block.draft, .graph-edge-label.draft"));
+  const existingDraft = getTimelineDraft(lane.dataset.userId, lane.dataset.date);
+  const canMoveDraft = isDraftTarget
+    && existingDraft;
+
+  if (canMoveDraft) {
+    const draftStart = toMinutes(existingDraft.start);
+    const draftEnd = toMinutes(existingDraft.end);
+    timelineDrag = {
+      mode: "move",
+      draftId: existingDraft.id,
+      pointerId: event.pointerId,
+      lane,
+      userId: lane.dataset.userId,
+      date: lane.dataset.date,
+      durationMinutes: Math.max(draftEnd - draftStart, SLOT_MINUTES),
+      pointerOffsetMinutes: pointerMinutes - draftStart
+    };
+    lane.classList.add("moving-draft");
+    renderLiveDraftOverlay(lane);
+  } else {
+    timelineDrag = {
+      mode: "create",
+      draftId: existingDraft?.id || makeRecordId("draft"),
+      pointerId: event.pointerId,
+      lane,
+      userId: lane.dataset.userId,
+      date: lane.dataset.date,
+      anchorMinutes: pointerMinutes
+    };
+  }
+
+  lane.setPointerCapture?.(event.pointerId);
+  updateTimelineDraftFromDrag(pointerMinutes);
+}
+
+function moveTimelineDraft(event) {
+  if (!timelineDrag || event.pointerId !== timelineDrag.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  updateTimelineDraftFromDrag(getTimelineMinutesFromPointer(timelineDrag.lane, event.clientX));
+}
+
+function finishTimelineDraft(event) {
+  if (!timelineDrag || event.pointerId !== timelineDrag.pointerId) {
+    return;
+  }
+
+  timelineDrag.lane.releasePointerCapture?.(event.pointerId);
+  timelineDrag.lane.classList.remove("moving-draft");
+  timelineDrag = null;
+  renderTimelineTools();
+}
+
+function updateTimelineDraftFromDrag(currentMinutes) {
+  const range = timelineDrag.mode === "move"
+    ? normalizeMovedTimelineDraftRange(currentMinutes, timelineDrag.pointerOffsetMinutes, timelineDrag.durationMinutes)
+    : normalizeTimelineDraftRange(timelineDrag.anchorMinutes, currentMinutes);
+  upsertTimelineDraft({
+    id: timelineDrag.draftId,
+    userId: timelineDrag.userId,
+    date: timelineDrag.date,
+    start: minutesToTime(range.start),
+    end: minutesToTime(range.end)
+  });
+
+  renderTimelineDraftActions();
+  renderLiveDraftOverlay(timelineDrag.lane);
+}
+
+function renderLiveDraftOverlay(lane) {
+  lane.querySelectorAll("[data-live-draft], .graph-edge-label.draft, .graph-block.draft").forEach((element) => element.remove());
+  const draft = getTimelineDraft(lane.dataset.userId, lane.dataset.date);
+  if (!draft) {
+    lane.classList.remove("has-draft");
+    return;
+  }
+
+  lane.classList.add("has-draft");
+  lane.querySelectorAll(".graph-empty").forEach((element) => element.remove());
+  const wrapper = document.createElement("span");
+  wrapper.dataset.liveDraft = "true";
+  wrapper.innerHTML = graphDraftBlock(draft.userId, draft.date);
+  lane.append(wrapper);
+}
+
+function clearLiveDraftOverlays() {
+  elements.timelineCanvas?.querySelectorAll(".graph-lane").forEach((lane) => {
+    lane.querySelectorAll("[data-live-draft], .graph-edge-label.draft, .graph-block.draft").forEach((element) => element.remove());
+    lane.classList.remove("has-draft", "moving-draft");
+  });
+}
+
+function getTimelineDraft(userId, date) {
+  return timelineDrafts.find((draft) => draft.userId === userId && draft.date === date);
+}
+
+function upsertTimelineDraft(draft) {
+  const existingIndex = timelineDrafts.findIndex((item) => (
+    item.id === draft.id || (item.userId === draft.userId && item.date === draft.date)
+  ));
+
+  if (existingIndex >= 0) {
+    timelineDrafts[existingIndex] = { ...timelineDrafts[existingIndex], ...draft };
+    return;
+  }
+
+  timelineDrafts.push(draft);
+}
+
+function normalizeTimelineDraftRange(anchorMinutes, currentMinutes) {
+  const first = Math.min(anchorMinutes, currentMinutes);
+  const last = Math.max(anchorMinutes, currentMinutes);
+  const start = Math.min(Math.max(first, TIMELINE_START_MINUTES), TIMELINE_END_MINUTES - SLOT_MINUTES);
+  const end = Math.min(Math.max(last, start + SLOT_MINUTES), TIMELINE_END_MINUTES);
+  return { start, end };
+}
+
+function normalizeMovedTimelineDraftRange(currentMinutes, pointerOffsetMinutes, durationMinutes) {
+  const duration = Math.max(durationMinutes, SLOT_MINUTES);
+  const maxStart = TIMELINE_END_MINUTES - duration;
+  const rawStart = currentMinutes - pointerOffsetMinutes;
+  const start = Math.min(Math.max(roundToNearestSlot(rawStart), TIMELINE_START_MINUTES), maxStart);
+  return { start, end: start + duration };
+}
+
+function getTimelineMinutesFromPointer(lane, clientX) {
+  const rect = lane.getBoundingClientRect();
+  const ratio = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
+  const rawMinutes = TIMELINE_START_MINUTES + ratio * (TIMELINE_END_MINUTES - TIMELINE_START_MINUTES);
+  return Math.min(Math.max(roundToNearestSlot(rawMinutes), TIMELINE_START_MINUTES), TIMELINE_END_MINUTES);
+}
+
+function renderTimelineDraftActions() {
+  if (!elements.timelineDraftActions) {
+    return;
+  }
+
+  if (timelineDrafts.length === 0) {
+    elements.timelineDraftActions.classList.add("hidden");
+    if (elements.timelineDraftTitle) {
+      elements.timelineDraftTitle.textContent = "";
+    }
+    if (elements.timelineDraftMeta) {
+      elements.timelineDraftMeta.textContent = "";
+    }
+    return;
+  }
+
+  const draftSummaries = timelineDrafts.map((draft) => formatTimelineDraftSummary(draft));
+  elements.timelineDraftActions.classList.remove("hidden");
+  if (elements.timelineDraftTitle) {
+    elements.timelineDraftTitle.textContent = timelineDrafts.length === 1
+      ? "Draft schedule"
+      : `${timelineDrafts.length} draft schedules`;
+  }
+  if (elements.timelineDraftMeta) {
+    elements.timelineDraftMeta.textContent = draftSummaries.join(" · ");
+  }
+  if (elements.saveTimelineDraftButton) {
+    elements.saveTimelineDraftButton.textContent = timelineDrafts.length === 1 ? "Save schedule" : "Save schedules";
+  }
+  if (elements.clearTimelineDraftButton) {
+    elements.clearTimelineDraftButton.textContent = timelineDrafts.length === 1 ? "Clear" : "Clear all";
+  }
+}
+
+function saveTimelineDraftSchedule() {
+  if (timelineDrafts.length === 0) {
+    return;
+  }
+
+  const conflict = getTimelineDraftScheduleConflict();
+
+  if (conflict) {
+    window.alert(formatScheduleConflictMessage(conflict.user, conflict.conflictDays));
+    return;
+  }
+
+  let savedCount = 0;
+  timelineDrafts.forEach((draft) => {
+    const user = data.users.find((item) => item.id === draft.userId);
+    if (!user) {
+      return;
+    }
+
+    user.schedules.push({
+      id: makeRecordId("schedule"),
+      shiftType: "custom",
+      days: [getDayNameFromDate(draft.date)],
+      startDate: draft.date,
+      endDate: draft.date,
+      start: draft.start,
+      end: draft.end
+    });
+    savedCount += 1;
+  });
+
+  timelineDrafts = [];
+  completeAdminSave(savedCount === 1 ? "Schedule saved." : "Schedules saved.");
+}
+
+function clearTimelineDraft() {
+  timelineDrafts = [];
+  renderTimelineTools();
+}
+
+function formatTimelineDraftSummary(draft) {
+  const user = data.users.find((item) => item.id === draft.userId);
+  const abbreviation = getSelectedTimezoneAbbreviationForDate(draft.date);
+  const start = formatEasternTimeInputForDisplay(draft.date, draft.start);
+  const end = formatEasternTimeInputForDisplay(draft.date, draft.end);
+  return `${user?.name || "Removed user"} · ${getDayNameFromDate(draft.date).slice(0, 3)} · ${start}–${end} ${abbreviation}`;
+}
+
+function getScheduleDayConflicts(user, days, dateRange, ignoredScheduleId = null) {
+  const proposedRange = dateRange || { startDate: "0001-01-01", endDate: "9999-12-31" };
+  const businessDays = Array.from(new Set(days.filter((day) => SCHEDULE_DAYS.includes(day))));
+  return businessDays.filter((day) => user.schedules.some((schedule) => (
+    schedule.id !== ignoredScheduleId
+      && Array.isArray(schedule.days)
+      && schedule.days.includes(day)
+      && scheduleDateRangesOverlap(schedule, proposedRange)
+  )));
+}
+
+function scheduleDateRangesOverlap(schedule, dateRange) {
+  const scheduleStart = getScheduleStartDate(schedule);
+  const scheduleEnd = getScheduleEndDate(schedule);
+  return scheduleStart <= dateRange.endDate && dateRange.startDate <= scheduleEnd;
+}
+
+function getScheduleStartDate(schedule) {
+  return isValidDateInput(schedule?.startDate || "") ? schedule.startDate : "0001-01-01";
+}
+
+function getScheduleEndDate(schedule) {
+  return isValidDateInput(schedule?.endDate || "") ? schedule.endDate : "9999-12-31";
+}
+
+function getTimelineDraftScheduleConflict() {
+  const proposedDaysByUser = new Map();
+  for (const draft of timelineDrafts) {
+    const user = data.users.find((item) => item.id === draft.userId);
+    if (!user) {
+      continue;
+    }
+
+    const day = getDayNameFromDate(draft.date);
+    const draftDateRange = { startDate: draft.date, endDate: draft.date };
+    const existingConflicts = getScheduleDayConflicts(user, [day], draftDateRange);
+    if (existingConflicts.length > 0) {
+      return { user, conflictDays: existingConflicts };
+    }
+
+    if (!SCHEDULE_DAYS.includes(day)) {
+      continue;
+    }
+
+    const proposedDays = proposedDaysByUser.get(user.id) || new Set();
+    const proposedKey = `${draft.date}:${day}`;
+    if (proposedDays.has(proposedKey)) {
+      return { user, conflictDays: [day] };
+    }
+
+    proposedDays.add(proposedKey);
+    proposedDaysByUser.set(user.id, proposedDays);
+  }
+
+  return null;
+}
+
+function formatScheduleConflictMessage(user, conflictDays) {
+  const days = conflictDays.map((day) => day.slice(0, 3)).join(", ");
+  return `${user.name} already has a schedule in this date range for ${days}. Update the existing schedule or choose another date range.`;
+}
+
 function prefillSlotFromTimeline(event) {
   const removeButton = event.target.closest("[data-action='remove-schedule']");
   if (removeButton) {
-    removeSchedule(removeButton.dataset.userId, removeButton.dataset.scheduleId);
+    removeSchedule(removeButton.dataset.userId, removeButton.dataset.scheduleId, removeButton.dataset.date);
     return;
   }
 
@@ -1210,35 +2929,44 @@ function prefillSlotFromTimeline(event) {
     return;
   }
 
-  const lane = event.target.closest(".graph-lane");
-  if (lane) {
-    const rect = lane.getBoundingClientRect();
-    const ratio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
-    const rawMinutes = TIMELINE_START_MINUTES + ratio * (TIMELINE_END_MINUTES - TIMELINE_START_MINUTES);
-    const startMinutes = Math.min(roundToNearestSlot(rawMinutes), TIMELINE_END_MINUTES - SLOT_MINUTES);
-    prefillScheduleForm(lane.dataset.userId, lane.dataset.date, minutesToTime(startMinutes), minutesToTime(startMinutes + SLOT_MINUTES), true);
-    return;
-  }
-
   const weekCell = event.target.closest(".week-cell");
   if (weekCell) {
+    const editButton = event.target.closest("[data-action='edit-schedule']");
+    if (editButton) {
+      editScheduleFromGraph(editButton.dataset.userId, editButton.dataset.scheduleId, editButton.dataset.date);
+      return;
+    }
+
     const template = getShiftTemplate(elements.shiftTemplateSelect?.value) || getShiftTemplate("regular") || data.shiftTemplates[0];
     prefillScheduleForm(weekCell.dataset.userId, weekCell.dataset.date, template?.start || "09:00", template?.end || "17:00", false);
     return;
   }
-
-  const rect = elements.timelineCanvas.getBoundingClientRect();
-  const ratio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
-  const rawMinutes = TIMELINE_START_MINUTES + ratio * (TIMELINE_END_MINUTES - TIMELINE_START_MINUTES);
-  const startMinutes = Math.min(roundToNearestSlot(rawMinutes), TIMELINE_END_MINUTES - SLOT_MINUTES);
-  if (elements.slotDateInput && elements.timelineDateInput?.value) {
-    elements.slotDateInput.value = elements.timelineDateInput.value;
-  }
-  elements.slotStartInput.value = minutesToTime(startMinutes);
-  elements.slotEndInput.value = minutesToTime(startMinutes + SLOT_MINUTES);
 }
 
-function prefillScheduleForm(userId, date, start, end, forceCustom) {
+function editScheduleFromGraph(userId, scheduleId, date) {
+  const user = data.users.find((item) => item.id === userId);
+  const schedule = user?.schedules.find((item) => item.id === scheduleId);
+  if (!user || !schedule) {
+    return;
+  }
+
+  prefillScheduleForm(userId, date, schedule.start, schedule.end, false, {
+    scheduleId,
+    days: schedule.days,
+    shiftType: schedule.shiftType,
+    startDate: isValidDateInput(schedule.startDate || "") ? schedule.startDate : getWeekDates(date)[0],
+    endDate: isValidDateInput(schedule.endDate || "") ? schedule.endDate : getWeekDates(date)[4]
+  });
+}
+
+function prefillScheduleForm(userId, date, start, end, forceCustom, options = {}) {
+  const displayStart = formatEasternTimeInputForDisplay(date, start);
+  const displayEnd = formatEasternTimeInputForDisplay(date, end);
+  editingSchedule = options.scheduleId ? { userId, scheduleId: options.scheduleId } : null;
+  const weekDates = getWeekDates(date);
+  const startDate = options.startDate ? getBusinessWeekRange(options.startDate).startDate : weekDates[0];
+  const endDate = options.endDate ? getBusinessWeekRange(options.endDate).endDate : weekDates[4];
+
   if (elements.scheduleUserSelect) {
     elements.scheduleUserSelect.value = userId;
   }
@@ -1247,36 +2975,56 @@ function prefillScheduleForm(userId, date, start, end, forceCustom) {
     elements.timelineUserSelect.value = userId;
   }
 
-  if (elements.shiftTemplateSelect && forceCustom) {
-    elements.shiftTemplateSelect.value = "custom";
+  if (elements.shiftTemplateSelect) {
+    const optionValues = [...elements.shiftTemplateSelect.options].map((option) => option.value);
+    if (options.shiftType && optionValues.includes(options.shiftType)) {
+      elements.shiftTemplateSelect.value = options.shiftType;
+    } else if (forceCustom) {
+      elements.shiftTemplateSelect.value = "custom";
+    }
+  }
+
+  if (elements.scheduleStartDateInput) {
+    elements.scheduleStartDateInput.value = startDate;
+  }
+
+  if (elements.scheduleEndDateInput) {
+    elements.scheduleEndDateInput.value = endDate;
   }
 
   if (elements.scheduleStartInput) {
-    elements.scheduleStartInput.value = start;
+    elements.scheduleStartInput.value = displayStart;
   }
 
   if (elements.scheduleEndInput) {
-    elements.scheduleEndInput.value = end;
+    elements.scheduleEndInput.value = displayEnd;
   }
 
   if (elements.slotStartInput) {
-    elements.slotStartInput.value = start;
+    elements.slotStartInput.value = displayStart;
   }
 
   if (elements.slotEndInput) {
-    elements.slotEndInput.value = end;
+    elements.slotEndInput.value = displayEnd;
   }
 
-  selectOnlyScheduleDay(getDayNameFromDate(date));
+  selectScheduleDays(options.days || [getDayNameFromDate(date)]);
+  updateScheduleRangeConstraints();
+  renderScheduleFormMode();
 }
 
 function selectOnlyScheduleDay(day) {
+  selectScheduleDays([day]);
+}
+
+function selectScheduleDays(days) {
   if (!elements.dayCheckboxes) {
     return;
   }
 
+  const selectedDays = new Set(days);
   elements.dayCheckboxes.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
-    checkbox.checked = checkbox.value === day;
+    checkbox.checked = selectedDays.has(checkbox.value);
   });
 }
 
@@ -1386,29 +3134,95 @@ function removeHoliday(holidayId) {
     return;
   }
 
+  const holiday = data.holidays.find((item) => item.id === holidayId);
+  if (!holiday) {
+    return;
+  }
+
+  openRemoveHolidayModal(holiday);
+}
+
+function openRemoveHolidayModal(holiday) {
+  if (!elements.removeHolidayModal) {
+    performRemoveHoliday(holiday.id);
+    return;
+  }
+
+  pendingRemoveHolidayId = holiday.id;
+  if (elements.removeHolidayModalName) {
+    elements.removeHolidayModalName.textContent = `${holiday.name || "Holiday"} · ${formatHolidayDate(holiday.date)}`;
+  }
+  if (elements.removeHolidayModalImpact) {
+    const userName = getHolidayUserName(holiday);
+    const scopeText = holiday.userId === GLOBAL_HOLIDAY_USER_ID
+      ? "all users"
+      : userName;
+    elements.removeHolidayModalImpact.textContent = `This removes the holiday for ${scopeText}. Queue availability will update immediately.`;
+  }
+
+  elements.removeHolidayModal.classList.remove("hidden");
+  elements.removeHolidayModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.cancelRemoveHolidayButton?.focus(), 0);
+}
+
+function closeRemoveHolidayModal() {
+  pendingRemoveHolidayId = null;
+  if (!elements.removeHolidayModal) {
+    return;
+  }
+
+  elements.removeHolidayModal.classList.add("hidden");
+  elements.removeHolidayModal.setAttribute("aria-hidden", "true");
+}
+
+function confirmRemoveHoliday() {
+  if (!pendingRemoveHolidayId || !isAdminTabUnlocked("holidays")) {
+    closeRemoveHolidayModal();
+    return;
+  }
+
+  const holidayId = pendingRemoveHolidayId;
+  closeRemoveHolidayModal();
+  performRemoveHoliday(holidayId);
+}
+
+function performRemoveHoliday(holidayId) {
   data.holidays = data.holidays.filter((holiday) => holiday.id !== holidayId);
   completeAdminSave("Holiday removed.", "holidays");
 }
 
+function getHolidayUserName(holiday) {
+  return holiday.userId === GLOBAL_HOLIDAY_USER_ID
+    ? "All users"
+    : data.users.find((user) => user.id === holiday.userId)?.name || "Removed user";
+}
+
+function formatHolidayDate(date) {
+  return isValidDateInput(date || "") ? formatDisplayDate(date) : date || "No date";
+}
+
 function markSelectedAssigned() {
   const easternNow = getEasternNow();
-  const queueState = getQueueState(elements.assignmentSystemSelect.value, easternNow);
+  const queueState = getQueueState(getAssignmentQueueSystemId(), easternNow);
   const selectedRow = queueState.rows.find((row) => row.user.id === selectedAssigneeId);
   if (!queueState.system || !selectedRow || !selectedRow.selectable) {
     return;
   }
 
-  data.assignmentLog.push({
+  const assignmentRecord = {
     id: makeRecordId("assignment"),
     assignedAt: new Date().toISOString(),
-    easternDate: easternNow.date,
+    easternDate: queueState.effectiveNow.date,
+    easternTime: queueState.effectiveNow.date === easternNow.date
+      ? easternNow.time
+      : minutesToTime(selectedRow.availabilityStart),
     systemId: queueState.system.id,
     systemName: queueState.system.name,
     userId: selectedRow.user.id,
-    userName: selectedRow.user.name,
-    status: selectedRow.status,
-    statusLabel: selectedRow.badge
-  });
+    userName: selectedRow.user.name
+  };
+  data.assignmentLog.push(assignmentRecord);
+  lastAssignmentId = assignmentRecord.id;
 
   const originalIndex = queueState.system.primaryUserIds.indexOf(selectedRow.user.id);
   if (originalIndex >= 0) {
@@ -1416,42 +3230,60 @@ function markSelectedAssigned() {
   }
 
   selectedAssigneeId = null;
-  render();
+  completeDataSave("Ticket assigned.", { showToast: false });
 }
 
 function getQueueState(systemId, easternNow) {
-  const system = data.systems.find((item) => item.id === systemId);
+  const system = getAssignmentSystemById(systemId);
   if (!system) {
-    return { system: null, rows: [], recommendedRow: null };
+    return { system: null, rows: [], recommendedRow: null, effectiveNow: easternNow };
   }
 
-  const rows = system.primaryUserIds.map((userId, systemPriority) => {
-    const user = data.users.find((item) => item.id === userId);
-    if (!user) {
-      return null;
-    }
-
-    const status = getUserStatus(user, easternNow);
-    const metrics = getAssignmentMetrics(user, systemPriority, easternNow);
-    return { user, ...status, ...metrics };
-  }).filter(Boolean).sort(compareQueueRows);
+  const effectiveNow = getEffectiveQueueNow(easternNow);
+  const isShiftQueue = system.id === SHIFT_QUEUE_SYSTEM_ID;
+  const rows = data.users.map((user) => {
+    const systemPriority = isShiftQueue ? -1 : system.primaryUserIds.indexOf(user.id);
+    const isCoverageMember = isShiftQueue || systemPriority >= 0;
+    const queuePriority = isShiftQueue ? Number.POSITIVE_INFINITY : getRotatedQueuePriority(system, systemPriority);
+    const status = getUserStatus(user, effectiveNow);
+    const waitMinutes = getAvailabilityWaitMinutes(easternNow, effectiveNow, status);
+    const metrics = getAssignmentMetrics(user, systemPriority, queuePriority, effectiveNow, status, waitMinutes);
+    return { user, isCoverageMember, effectiveDate: effectiveNow.date, effectiveDay: effectiveNow.day, ...status, ...metrics };
+  }).sort(compareQueueRows);
 
   const recommendedRow = rows.find((row) => row.selectable) || null;
 
-  return { system, rows, recommendedRow };
+  return { system, rows, recommendedRow, effectiveNow };
 }
 
-function getAssignmentMetrics(user, systemPriority, easternNow) {
-  const windows = getScheduleWindowsForDate(user, easternNow.date, easternNow.day);
-  const earliestStart = windows.length > 0
-    ? Math.min(...windows.map((window) => toMinutes(window.start)))
-    : Number.POSITIVE_INFINITY;
+function getAssignmentSystemById(systemId) {
+  if (systemId === SHIFT_QUEUE_SYSTEM_ID) {
+    return { id: SHIFT_QUEUE_SYSTEM_ID, name: SHIFT_QUEUE_SYSTEM_NAME, primaryUserIds: [] };
+  }
 
+  return data.systems.find((item) => item.id === systemId) || null;
+}
+
+function getRotatedQueuePriority(system, systemPriority) {
+  if (!system.primaryUserIds.length || systemPriority < 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const queueIndex = getQueueIndex(system);
+  return (systemPriority - queueIndex + system.primaryUserIds.length) % system.primaryUserIds.length;
+}
+
+function getAssignmentMetrics(user, systemPriority, queuePriority, easternNow, status, waitMinutes) {
   return {
-    systemPriority,
-    scheduleStart: earliestStart,
-    dailyTickets: getDailyAssignmentCount(user.id, easternNow.date),
-    consecutiveTickets: getConsecutiveAssignmentCount(user.id, easternNow.date)
+    systemPriority: systemPriority >= 0 ? systemPriority : Number.POSITIVE_INFINITY,
+    queuePriority,
+    teamPriority: getTeamPriority(user.id),
+    currentMinutes: easternNow.minutes,
+    scheduleStart: status.availabilityStart,
+    waitMinutes,
+    dailyTickets: getDailyAssignmentCount(user, easternNow.date),
+    consecutiveTickets: getConsecutiveAssignmentCount(user, easternNow.date),
+    lastTicketToday: getLastAssignmentTimestampForUserOnDate(user, easternNow.date)
   };
 }
 
@@ -1477,8 +3309,12 @@ function compareQueueRowsByRule(left, right, rule) {
     return compareFiniteNumbers(left.scheduleStart, right.scheduleStart);
   }
 
-  if (rule === "systemPriority") {
-    return left.systemPriority - right.systemPriority;
+  if (rule === "queuePriority") {
+    if (!shouldCompareCoverageQueue(left, right)) {
+      return 0;
+    }
+
+    return compareFiniteNumbers(left.queuePriority, right.queuePriority);
   }
 
   if (rule === "dailyTickets") {
@@ -1489,7 +3325,29 @@ function compareQueueRowsByRule(left, right, rule) {
     return left.consecutiveTickets - right.consecutiveTickets;
   }
 
+  if (rule === "lastTicketToday") {
+    if (left.status !== "available" || right.status !== "available") {
+      return 0;
+    }
+
+    return left.lastTicketToday - right.lastTicketToday;
+  }
+
+  if (rule === "teamPriority") {
+    return compareFiniteNumbers(left.teamPriority, right.teamPriority);
+  }
+
   return 0;
+}
+
+function shouldCompareCoverageQueue(left, right) {
+  return (left.status === "available" && right.status === "available")
+    || left.availabilityStart === right.availabilityStart;
+}
+
+function getTeamPriority(userId) {
+  const index = data.users.findIndex((user) => user.id === userId);
+  return index >= 0 ? index : Number.POSITIVE_INFINITY;
 }
 
 function getQueueStatusRank(row) {
@@ -1504,6 +3362,49 @@ function getQueueStatusRank(row) {
   return 2;
 }
 
+function getEffectiveQueueNow(easternNow) {
+  if (data.users.some((user) => getUserStatus(user, easternNow).selectable)) {
+    return easternNow;
+  }
+
+  for (let offset = 1; offset <= 21; offset += 1) {
+    const date = formatDate(addDays(parseDate(easternNow.date), offset));
+    if (!isBusinessDay(date)) {
+      continue;
+    }
+
+    const candidateNow = buildEasternNow(date, "00:00");
+    if (data.users.some((user) => getUserStatus(user, candidateNow).selectable)) {
+      return candidateNow;
+    }
+  }
+
+  return easternNow;
+}
+
+function getAvailabilityWaitMinutes(referenceNow, effectiveNow, status) {
+  if (status.status === "available") {
+    return 0;
+  }
+
+  if (!Number.isFinite(status.availabilityStart)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const dayOffset = getDateOffset(referenceNow.date, effectiveNow.date);
+  return Math.max(0, dayOffset * 24 * 60 + status.availabilityStart - referenceNow.minutes);
+}
+
+function getDateOffset(startDate, endDate) {
+  const millisecondsPerDay = 24 * 60 * 60 * 1000;
+  return Math.round((parseDate(endDate).getTime() - parseDate(startDate).getTime()) / millisecondsPerDay);
+}
+
+function isBusinessDay(date) {
+  const day = getDayNameFromDate(date);
+  return day !== "Saturday" && day !== "Sunday";
+}
+
 function compareFiniteNumbers(left, right) {
   if (left === right) {
     return 0;
@@ -1514,26 +3415,87 @@ function compareFiniteNumbers(left, right) {
 
 function getDailyTicketRankings(date) {
   return data.users
-    .map((user) => ({
-      user,
-      count: getDailyAssignmentCount(user.id, date),
-      consecutive: getConsecutiveAssignmentCount(user.id, date)
-    }))
-    .sort((left, right) => right.count - left.count || right.consecutive - left.consecutive || left.user.name.localeCompare(right.user.name));
+    .map((user) => {
+      const assignments = getAssignmentsForUserOnDate(user, date)
+        .sort((left, right) => getAssignmentTimestamp(left) - getAssignmentTimestamp(right));
+      const reachedEntry = assignments.at(-1);
+      const reachedAt = reachedEntry?.assignedAt || "";
+
+      return {
+        user,
+        count: assignments.length,
+        reachedAt,
+        reachedTime: reachedEntry?.easternTime || "",
+        reachedTimestamp: getAssignmentTimestamp(reachedEntry)
+      };
+    })
+    .filter((entry) => entry.count > 0)
+    .sort((left, right) => right.count - left.count || left.reachedTimestamp - right.reachedTimestamp || left.user.name.localeCompare(right.user.name));
 }
 
-function getDailyAssignmentCount(userId, date) {
-  return data.assignmentLog.filter((entry) => entry.easternDate === date && entry.userId === userId).length;
+function getAssignmentTimestamp(entry) {
+  const instant = getAssignmentInstant(entry);
+  return instant ? instant.getTime() : Number.POSITIVE_INFINITY;
 }
 
-function getConsecutiveAssignmentCount(userId, date) {
+function getRecentAssignments() {
+  const cutoff = Date.now() - RECENT_ASSIGNMENTS_WINDOW_MS;
+  return data.assignmentLog
+    .filter((entry) => getAssignmentCreatedTimestamp(entry) >= cutoff)
+    .sort((left, right) => getAssignmentCreatedTimestamp(right) - getAssignmentCreatedTimestamp(left));
+}
+
+function getAssignmentCreatedTimestamp(entry) {
+  const instant = entry?.assignedAt ? new Date(entry.assignedAt) : getAssignmentInstant(entry);
+  return instant && !Number.isNaN(instant.getTime()) ? instant.getTime() : Number.NEGATIVE_INFINITY;
+}
+
+function getAssignmentInstant(entry) {
+  if (isValidDateInput(entry?.easternDate || "") && isValidTimeInput(entry?.easternTime || "")) {
+    return zonedWallTimeToDate(entry.easternDate, entry.easternTime, EASTERN_TIME_ZONE);
+  }
+
+  if (!entry?.assignedAt) {
+    return null;
+  }
+
+  const instant = new Date(entry.assignedAt);
+  return Number.isNaN(instant.getTime()) ? null : instant;
+}
+
+function getDailyAssignmentCount(userOrId, date) {
+  const user = getUserFromReference(userOrId);
+  return user ? getAssignmentsForUserOnDate(user, date).length : 0;
+}
+
+function getLastAssignmentTimestampForUserOnDate(user, date) {
+  const assignments = getAssignmentsForUserOnDate(user, date);
+  if (assignments.length === 0) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  return Math.max(...assignments.map(getAssignmentTimestamp));
+}
+
+function getDailyCoverageAssignmentCount(system, date) {
+  return data.assignmentLog.filter((entry) => (
+    getAssignmentEntryDate(entry) === date && isAssignmentForSystem(entry, system)
+  )).length;
+}
+
+function getConsecutiveAssignmentCount(userOrId, date) {
+  const user = getUserFromReference(userOrId);
+  if (!user) {
+    return 0;
+  }
+
   let count = 0;
   for (const entry of data.assignmentLog.slice().reverse()) {
-    if (entry.easternDate !== date) {
+    if (getAssignmentEntryDate(entry) !== date) {
       continue;
     }
 
-    if (entry.userId !== userId) {
+    if (!isAssignmentForUser(entry, user)) {
       break;
     }
 
@@ -1543,6 +3505,71 @@ function getConsecutiveAssignmentCount(userId, date) {
   return count;
 }
 
+function getAssignmentsForUserOnDate(user, date) {
+  return data.assignmentLog.filter((entry) => (
+    getAssignmentEntryDate(entry) === date && isAssignmentForUser(entry, user)
+  ));
+}
+
+function isAssignmentForSystem(entry, system) {
+  return entry.systemId === system.id || (!entry.systemId && entry.systemName === system.name);
+}
+
+function getAssignmentEntryDate(entry) {
+  if (isValidDateInput(entry?.easternDate || "")) {
+    return entry.easternDate;
+  }
+
+  if (!entry?.assignedAt) {
+    return "";
+  }
+
+  const assignedAt = new Date(entry.assignedAt);
+  if (Number.isNaN(assignedAt.getTime())) {
+    return "";
+  }
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: EASTERN_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(assignedAt);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function isAssignmentForUser(entry, user) {
+  if (entry?.userId === user.id) {
+    return true;
+  }
+
+  const entryUserStillExists = data.users.some((item) => item.id === entry?.userId);
+  return !entryUserStillExists && normalizeComparableText(entry?.userName) === normalizeComparableText(user.name);
+}
+
+function getUserFromReference(userOrId) {
+  if (typeof userOrId === "string") {
+    return data.users.find((user) => user.id === userOrId) || null;
+  }
+
+  return userOrId || null;
+}
+
+function normalizeComparableText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getOrdinalLabel(number) {
+  const remainder = number % 100;
+  if (remainder >= 11 && remainder <= 13) {
+    return `${number}th`;
+  }
+
+  const suffixes = { 1: "st", 2: "nd", 3: "rd" };
+  return `${number}${suffixes[number % 10] || "th"}`;
+}
+
 function getUserStatus(user, easternNow) {
   const holidayMatches = getHolidaysForUser(user.id, easternNow.date);
   if (holidayMatches.length > 0) {
@@ -1550,6 +3577,7 @@ function getUserStatus(user, easternNow) {
       status: "holiday",
       badge: "Holiday",
       selectable: false,
+      availabilityStart: Number.POSITIVE_INFINITY,
       message: `Holiday today: ${holidayMatches.map((holiday) => holiday.name || "Holiday").join(", ")}.`
     };
   }
@@ -1564,44 +3592,52 @@ function getUserStatus(user, easternNow) {
   if (currentBreak) {
     const nextStart = findNextAvailableStart(easternNow.minutes, windows, breaks);
     if (nextStart !== null) {
+      const nextStartDisplay = formatEasternTimeForDisplay(easternNow.date, minutesToTime(nextStart));
       return {
         status: "later",
         badge: "On break",
         selectable: true,
-        message: `Currently on break${currentBreak.reason ? ` (${currentBreak.reason})` : ""}. Back at ${minutesToTime(nextStart)} ET; you can pick them anyway.`
+        availabilityStart: nextStart,
+        message: `Currently on break${currentBreak.reason ? ` (${currentBreak.reason})` : ""}. Back at ${nextStartDisplay}. You can pick them anyway.`
       };
     }
   }
 
   const currentWindow = windows.find((window) => isWithinWindow(easternNow.minutes, toMinutes(window.start), toMinutes(window.end)));
   if (currentWindow && !currentBreak) {
+    const endDisplay = formatEasternTimeForDisplay(easternNow.date, currentWindow.end);
     return {
       status: "available",
       badge: currentWindow.source === "extra" ? "Extra slot" : "Available",
       selectable: true,
+      availabilityStart: easternNow.minutes,
       message: currentWindow.source === "extra"
-        ? `Available now via extra coverage slot until ${currentWindow.end} ET.`
-        : `Available now until ${currentWindow.end} ET.`
+        ? `Available now via extra coverage slot until ${endDisplay}.`
+        : `Available now until ${endDisplay}.`
     };
   }
 
   const nextStart = findNextAvailableStart(easternNow.minutes, windows, breaks);
   if (nextStart !== null) {
+    const nextStartDisplay = formatEasternTimeForDisplay(easternNow.date, minutesToTime(nextStart));
     return {
       status: "later",
       badge: "Later today",
       selectable: true,
-      message: `Not online yet. Scheduled to log in at ${minutesToTime(nextStart)} ET; you can pick them anyway.`
+      availabilityStart: nextStart,
+      message: `Not online yet. Scheduled to log in at ${nextStartDisplay}. You can pick them anyway.`
     };
   }
 
   if (windows.length > 0) {
     const latestEnd = Math.max(...windows.map((window) => toMinutes(window.end)));
+    const latestEndDisplay = formatEasternTimeForDisplay(easternNow.date, minutesToTime(latestEnd));
     return {
       status: "unavailable",
       badge: "Done today",
       selectable: false,
-      message: `No remaining availability today. Last scheduled end was ${minutesToTime(latestEnd)} ET.`
+      availabilityStart: Number.POSITIVE_INFINITY,
+      message: `No remaining availability today. Last scheduled end was ${latestEndDisplay}.`
     };
   }
 
@@ -1609,14 +3645,15 @@ function getUserStatus(user, easternNow) {
     status: "unavailable",
     badge: "Not scheduled",
     selectable: false,
+    availabilityStart: Number.POSITIVE_INFINITY,
     message: "Not scheduled today."
   };
 }
 
 function getScheduleWindowsForDate(user, date, day) {
   const scheduleWindows = user.schedules
-    .filter((schedule) => schedule.days.includes(day))
-    .map((schedule) => ({ id: schedule.id, source: "schedule", start: schedule.start, end: schedule.end, priority: Number(schedule.priority || 1) }));
+    .filter((schedule) => isScheduleActiveOnDate(schedule, date, day))
+    .map((schedule) => ({ id: schedule.id, source: "schedule", start: schedule.start, end: schedule.end }));
 
   const extraWindows = data.exceptions
     .filter((slot) => slot.userId === user.id && slot.date === date && slot.type === "extra")
@@ -1626,6 +3663,13 @@ function getScheduleWindowsForDate(user, date, day) {
     .concat(extraWindows)
     .filter((window) => isValidTimeRange(window.start, window.end))
     .sort((left, right) => toMinutes(left.start) - toMinutes(right.start));
+}
+
+function isScheduleActiveOnDate(schedule, date, day = getDayNameFromDate(date)) {
+  return Array.isArray(schedule.days)
+    && schedule.days.includes(day)
+    && getScheduleStartDate(schedule) <= date
+    && date <= getScheduleEndDate(schedule);
 }
 
 function findNextAvailableStart(currentMinutes, windows, breaks) {
@@ -1718,8 +3762,239 @@ function loadData() {
   }
 }
 
-function saveData() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+async function initializeSharedState() {
+  if (!canUseSharedState()) {
+    normalizeData();
+    lastPersistedData = cloneData(data);
+    return;
+  }
+
+  try {
+    const payload = await fetchSharedState();
+    sharedStateAvailable = true;
+    sharedStateRevision = payload.revision ?? null;
+    if (payload.data) {
+      applySharedStatePayload(payload);
+      return;
+    }
+  } catch {
+    sharedStateAvailable = false;
+  }
+
+  normalizeData();
+  lastPersistedData = cloneData(data);
+}
+
+function canUseSharedState() {
+  return window.location.protocol === "http:" || window.location.protocol === "https:";
+}
+
+async function fetchSharedState() {
+  const response = await fetch(SHARED_STATE_ENDPOINT, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Shared config returned ${response.status}.`);
+  }
+
+  return response.json();
+}
+
+async function refreshSharedStateIfIdle() {
+  if (!sharedStateAvailable || sharedStateSaveInProgress || hasLocalEditingInProgress()) {
+    return;
+  }
+
+  try {
+    const payload = await fetchSharedState();
+    if ((payload.revision ?? null) === sharedStateRevision || !payload.data) {
+      return;
+    }
+
+    applySharedStatePayload(payload);
+    selectedAssigneeId = null;
+    editingAssignmentId = null;
+    editingSchedule = null;
+    timelineDrafts = [];
+    render();
+  } catch {
+    // Keep the last loaded data visible. The next save will surface write failures.
+  }
+}
+
+function hasLocalEditingInProgress() {
+  if (unlockedAdminTabs.size > 0 || editingSchedule || editingAssignmentId || timelineDrafts.length > 0 || timelineDrag) {
+    return true;
+  }
+
+  const activeElement = document.activeElement;
+  return Boolean(activeElement?.closest?.("form"));
+}
+
+async function persistDataSnapshot(snapshot) {
+  if (!sharedStateAvailable) {
+    saveData(snapshot);
+    return { status: "saved", data: snapshot, revision: sharedStateRevision };
+  }
+
+  sharedStateSaveInProgress = true;
+  try {
+    const response = await fetch(SHARED_STATE_ENDPOINT, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        revision: sharedStateRevision,
+        data: snapshot
+      })
+    });
+
+    if (response.status === 409) {
+      await handleSharedStateConflict(await response.json());
+      return { status: "conflict" };
+    }
+
+    if (!response.ok) {
+      throw new Error(`Shared config returned ${response.status}.`);
+    }
+
+    const payload = await response.json();
+    return {
+      status: "saved",
+      data: payload.data || snapshot,
+      revision: payload.revision ?? null
+    };
+  } finally {
+    sharedStateSaveInProgress = false;
+  }
+}
+
+function applySharedStatePayload(payload) {
+  if (payload.data) {
+    validateData(payload.data);
+    data = payload.data;
+    normalizeData();
+    saveData(data);
+    lastPersistedData = cloneData(data);
+  }
+
+  sharedStateRevision = payload.revision ?? null;
+}
+
+function applyPersistedData(nextData, revision) {
+  validateData(nextData);
+  data = nextData;
+  normalizeData();
+  sharedStateRevision = revision ?? sharedStateRevision;
+  saveData(data);
+  lastPersistedData = cloneData(data);
+}
+
+async function handleSharedStateConflict(payload) {
+  sharedStateGeneration += 1;
+  if (payload?.data) {
+    applySharedStatePayload(payload);
+  } else {
+    const latestPayload = await fetchSharedState();
+    applySharedStatePayload(latestPayload);
+  }
+
+  selectedAssigneeId = null;
+  lastAssignmentId = null;
+  editingAssignmentId = null;
+  editingSchedule = null;
+  timelineDrafts = [];
+  render();
+  showSyncStateModal(
+    "Shared data changed",
+    "Your change was not saved because someone else updated the shared config first. The latest version has been loaded. Please apply your change again."
+  );
+}
+
+function handleSharedStateSaveError(error) {
+  sharedStateGeneration += 1;
+  data = cloneData(lastPersistedData);
+  selectedAssigneeId = null;
+  editingAssignmentId = null;
+  editingSchedule = null;
+  timelineDrafts = [];
+  render();
+  showSyncStateModal(
+    "Shared config unavailable",
+    `Your change was not saved. Make sure the scheduler server is still running and try again. ${error.message}`
+  );
+}
+
+function showSyncStateModal(title, message) {
+  if (!elements.syncStateModal) {
+    window.alert(`${title}\n\n${message}`);
+    return;
+  }
+
+  if (elements.syncStateModalTitle) {
+    elements.syncStateModalTitle.textContent = title;
+  }
+  if (elements.syncStateModalMessage) {
+    elements.syncStateModalMessage.textContent = message;
+  }
+
+  elements.syncStateModal.classList.remove("hidden");
+  elements.syncStateModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.closeSyncStateModalButton?.focus(), 0);
+}
+
+function closeSyncStateModal() {
+  if (!elements.syncStateModal) {
+    return;
+  }
+
+  elements.syncStateModal.classList.add("hidden");
+  elements.syncStateModal.setAttribute("aria-hidden", "true");
+}
+
+function loadDebugTimeOverride() {
+  try {
+    const saved = localStorage.getItem(DEBUG_TIME_STORAGE_KEY);
+    if (!saved) {
+      return null;
+    }
+
+    const parsed = JSON.parse(saved);
+    return isValidDateInput(parsed?.date) && isValidTimeInput(parsed?.time)
+      ? { date: parsed.date, time: parsed.time }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadDisplayTimezone() {
+  try {
+    return getDisplayTimezone(localStorage.getItem(DISPLAY_TIMEZONE_STORAGE_KEY)).id;
+  } catch {
+    return DISPLAY_TIMEZONES[0].id;
+  }
+}
+
+function getDisplayTimezone(timezoneId) {
+  return DISPLAY_TIMEZONES.find((timezone) => timezone.id === timezoneId) || DISPLAY_TIMEZONES[0];
+}
+
+function getSelectedDisplayTimezone() {
+  return getDisplayTimezone(selectedDisplayTimezoneId);
+}
+
+function saveDebugTimeOverride() {
+  if (!debugTimeOverride) {
+    return;
+  }
+
+  localStorage.setItem(DEBUG_TIME_STORAGE_KEY, JSON.stringify(debugTimeOverride));
+}
+
+function clearDebugTimeOverride() {
+  localStorage.removeItem(DEBUG_TIME_STORAGE_KEY);
+}
+
+function saveData(snapshot = data) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
 }
 
 function validateData(candidate) {
@@ -1764,7 +4039,17 @@ function normalizeData() {
     user.schedules.forEach((schedule) => {
       schedule.id ||= makeRecordId("schedule");
       schedule.shiftType ||= inferShiftType(schedule.start, schedule.end);
-      schedule.priority = Number(schedule.priority || 1);
+      schedule.days = Array.isArray(schedule.days) ? schedule.days : [];
+      if (schedule.startDate && !isValidDateInput(schedule.startDate)) {
+        delete schedule.startDate;
+      }
+      if (schedule.endDate && !isValidDateInput(schedule.endDate)) {
+        delete schedule.endDate;
+      }
+      if (schedule.startDate && schedule.endDate && schedule.startDate > schedule.endDate) {
+        [schedule.startDate, schedule.endDate] = [schedule.endDate, schedule.startDate];
+      }
+      delete schedule.priority;
     });
   });
 
@@ -1787,6 +4072,32 @@ function normalizeData() {
     }
     clampQueue(system.id);
   });
+
+  rebuildQueuesFromAssignmentLog();
+}
+
+function rebuildQueuesFromAssignmentLog() {
+  const rebuiltQueues = {};
+  data.systems.forEach((system) => {
+    rebuiltQueues[system.id] = 0;
+  });
+
+  data.assignmentLog
+    .slice()
+    .sort((left, right) => getAssignmentTimestamp(left) - getAssignmentTimestamp(right))
+    .forEach((entry) => {
+      const system = data.systems.find((item) => isAssignmentForSystem(entry, item));
+      if (!system || system.primaryUserIds.length === 0) {
+        return;
+      }
+
+      const userIndex = system.primaryUserIds.indexOf(entry.userId);
+      if (userIndex >= 0) {
+        rebuiltQueues[system.id] = (userIndex + 1) % system.primaryUserIds.length;
+      }
+    });
+
+  data.queues = rebuiltQueues;
 }
 
 function setDefaultDates() {
@@ -1794,6 +4105,8 @@ function setDefaultDates() {
   if (elements.timelineDateInput) {
     elements.timelineDateInput.value ||= today;
   }
+
+  syncScheduleDateRangeToGraphWeek(false);
 
   if (elements.slotDateInput) {
     elements.slotDateInput.value ||= today;
@@ -1804,32 +4117,142 @@ function setDefaultDates() {
   }
 }
 
+function syncScheduleDateRangeToGraphWeek(force = true) {
+  if (!elements.scheduleStartDateInput || !elements.scheduleEndDateInput || editingSchedule) {
+    return;
+  }
+
+  if (!force && elements.scheduleStartDateInput.value && elements.scheduleEndDateInput.value) {
+    return;
+  }
+
+  const weekDates = getWeekDates(elements.timelineDateInput?.value || getEasternNow().date);
+  elements.scheduleStartDateInput.value = weekDates[0];
+  elements.scheduleEndDateInput.value = weekDates[4];
+  updateScheduleRangeConstraints();
+}
+
+function normalizeScheduleDateRangeInputs(changedField = "start") {
+  if (!elements.scheduleStartDateInput || !elements.scheduleEndDateInput) {
+    return;
+  }
+
+  const fallbackDate = elements.timelineDateInput?.value || getEasternNow().date;
+  const startDateValue = isValidDateInput(elements.scheduleStartDateInput.value)
+    ? elements.scheduleStartDateInput.value
+    : fallbackDate;
+  const endDateValue = isValidDateInput(elements.scheduleEndDateInput.value)
+    ? elements.scheduleEndDateInput.value
+    : startDateValue;
+  const startWeek = getBusinessWeekRange(startDateValue);
+  let endWeek = getBusinessWeekRange(endDateValue);
+
+  if (endWeek.endDate < startWeek.startDate) {
+    endWeek = changedField === "end" ? startWeek : getBusinessWeekRange(startWeek.startDate);
+  }
+
+  elements.scheduleStartDateInput.value = startWeek.startDate;
+  elements.scheduleEndDateInput.value = endWeek.endDate;
+  updateScheduleRangeConstraints();
+}
+
+function updateScheduleRangeConstraints() {
+  if (!elements.scheduleStartDateInput || !elements.scheduleEndDateInput) {
+    return;
+  }
+
+  elements.scheduleEndDateInput.min = elements.scheduleStartDateInput.value || "";
+}
+
+function getBusinessWeekRange(date) {
+  const weekDates = getWeekDates(date);
+  return {
+    startDate: weekDates[0],
+    endDate: weekDates[4]
+  };
+}
+
 function graphBlock(block, options = {}) {
-  const label = formatGraphBlockText(block.start, block.end, block.type, block.label);
+  const label = formatGraphBlockText(block.start, block.end, block.type, block.label, block.date);
+  const edgeLabels = graphEdgeLabels(block);
+  const interiorLabel = formatGraphBlockInteriorText(block.type, block.label);
   return `
+    ${edgeLabels}
     <span class="graph-block ${block.type}" style="${timeRangeStyle(block.start, block.end)}" title="${escapeHtml(label)}">
-      ${options.hideLabel ? "" : `<span>${escapeHtml(label)}</span>`}
+      ${options.hideLabel || !interiorLabel ? "" : `<span>${escapeHtml(interiorLabel)}</span>`}
       ${graphRemoveButton(block)}
     </span>
   `;
 }
 
-function graphFloatingLabel(block) {
-  const label = formatGraphBlockText(block.start, block.end, block.type, block.label);
-  return `<span class="graph-floating-label" style="${timeStartStyle(block.start)}">${escapeHtml(label)}</span>`;
+function graphDraftBlock(userId, date) {
+  const draft = getTimelineDraft(userId, date);
+  if (!draft) {
+    return "";
+  }
+
+  const draftBlock = {
+    type: "draft",
+    label: "Draft",
+    date,
+    start: draft.start,
+    end: draft.end
+  };
+
+  return `
+    ${graphEdgeLabels(draftBlock)}
+    <span class="graph-block draft" style="${timeRangeStyle(draft.start, draft.end)}" title="Drag to move before saving">
+      <span>New schedule</span>
+    </span>
+  `;
 }
 
 function weekGraphPill(block) {
-  const label = formatGraphBlockText(block.start, block.end, block.type, block.label);
+  const label = formatGraphBlockText(block.start, block.end, block.type, block.label, block.date);
+  const editAttributes = block.type === "schedule"
+    ? `
+      data-action="edit-schedule"
+      data-user-id="${escapeHtml(block.userId)}"
+      data-schedule-id="${escapeHtml(block.id)}"
+      data-date="${escapeHtml(block.date)}"
+      title="Click to update schedule"
+    `
+    : "";
   return `
-    <span class="week-pill ${block.type}">
+    <span class="week-pill ${block.type}"${editAttributes}>
       <span>${escapeHtml(label)}</span>
       ${graphRemoveButton(block)}
     </span>
   `;
 }
 
+function graphEdgeLabels(block) {
+  if (block.type === "holiday") {
+    return "";
+  }
+
+  const start = formatEasternTimeInputForDisplay(block.date || getScheduleReferenceDate(), block.start);
+  const end = formatEasternTimeInputForDisplay(block.date || getScheduleReferenceDate(), block.end);
+  return `
+    <span class="graph-edge-label ${escapeHtml(block.type)} start" style="${timeStartStyle(block.start)}">${escapeHtml(start)}</span>
+    <span class="graph-edge-label ${escapeHtml(block.type)} end" style="${timeEndStyle(block.end)}">${escapeHtml(end)}</span>
+  `;
+}
+
+function formatGraphBlockInteriorText(type, label) {
+  if (type === "schedule") {
+    return "";
+  }
+
+  if (type === "holiday") {
+    return label;
+  }
+
+  return label || "";
+}
+
 function graphRemoveButton(block) {
+  const label = formatGraphBlockText(block.start, block.end, block.type, block.label, block.date);
   if (block.type === "schedule") {
     return `
       <button
@@ -1838,7 +4261,8 @@ function graphRemoveButton(block) {
         data-action="remove-schedule"
         data-user-id="${escapeHtml(block.userId)}"
         data-schedule-id="${escapeHtml(block.id)}"
-        aria-label="Remove schedule ${escapeHtml(block.start)} to ${escapeHtml(block.end)}"
+        data-date="${escapeHtml(block.date)}"
+        aria-label="Remove schedule ${escapeHtml(label)}"
       >×</button>
     `;
   }
@@ -1850,7 +4274,7 @@ function graphRemoveButton(block) {
         type="button"
         data-action="remove-slot"
         data-slot-id="${escapeHtml(block.id)}"
-        aria-label="Remove ${block.type === "break" ? "break" : "extra slot"} ${escapeHtml(block.start)} to ${escapeHtml(block.end)}"
+        aria-label="Remove ${block.type === "break" ? "break" : "extra slot"} ${escapeHtml(label)}"
       >×</button>
     `;
   }
@@ -1858,16 +4282,16 @@ function graphRemoveButton(block) {
   return "";
 }
 
-function formatGraphBlockText(start, end, type, label) {
+function formatGraphBlockText(start, end, type, label, date = getScheduleReferenceDate()) {
   if (type === "schedule") {
-    return `${start}–${end}`;
+    return `${formatEasternTimeInputForDisplay(date, start)}–${formatEasternTimeInputForDisplay(date, end)}`;
   }
 
   if (type === "holiday") {
     return label;
   }
 
-  return `${label} · ${start}–${end}`;
+  return `${label} · ${formatEasternTimeInputForDisplay(date, start)}–${formatEasternTimeInputForDisplay(date, end)}`;
 }
 
 function timeRangeStyle(start, end) {
@@ -1886,7 +4310,23 @@ function timeStartStyle(start) {
   return `left:${left}%;`;
 }
 
+function timeEndStyle(end) {
+  const endMinutes = Math.min(toMinutes(end), TIMELINE_END_MINUTES);
+  const total = TIMELINE_END_MINUTES - TIMELINE_START_MINUTES;
+  const left = Math.max(((endMinutes - TIMELINE_START_MINUTES) / total) * 100, 0);
+  return `left:${left}%;`;
+}
+
 function getEasternNow() {
+  if (devModeUnlocked && debugTimeOverride) {
+    return buildEasternNow(debugTimeOverride.date, debugTimeOverride.time);
+  }
+
+  return getLiveEasternNow();
+}
+
+function getLiveEasternNow() {
+  const now = new Date();
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: EASTERN_TIME_ZONE,
     weekday: "long",
@@ -1896,17 +4336,206 @@ function getEasternNow() {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23"
-  }).formatToParts(new Date());
+  }).formatToParts(now);
 
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   const time = `${values.hour}:${values.minute}`;
+  const date = `${values.year}-${values.month}-${values.day}`;
 
+  return buildEasternNow(date, time);
+}
+
+function buildEasternNow(date, time) {
   return {
-    day: values.weekday,
-    date: `${values.year}-${values.month}-${values.day}`,
+    day: getDayNameFromDate(date),
+    date,
+    displayDate: formatDisplayDate(date),
     time,
     minutes: toMinutes(time)
   };
+}
+
+function getScheduleReferenceDate() {
+  return elements.timelineDateInput?.value || getEasternNow().date;
+}
+
+function getSelectedTimezoneAbbreviationForDate(date) {
+  const referenceDate = zonedWallTimeToDate(date, "12:00", EASTERN_TIME_ZONE);
+  return getTimezoneAbbreviation(referenceDate, getSelectedDisplayTimezone());
+}
+
+function formatEasternTimeInputForDisplay(date, time) {
+  if (!isValidDateInput(date) || !isValidTimeInput(time)) {
+    return time || "";
+  }
+
+  const instant = zonedWallTimeToDate(date, time, EASTERN_TIME_ZONE);
+  return getZonedDateTimeParts(instant, getSelectedDisplayTimezone().timeZone).time;
+}
+
+function convertDisplayDateTimeToEastern(date, time, timezone = getSelectedDisplayTimezone()) {
+  if (!isValidDateInput(date) || !isValidTimeInput(time)) {
+    return { date, time };
+  }
+
+  const instant = zonedWallTimeToDate(date, time, timezone.timeZone);
+  return getZonedDateTimeParts(instant, EASTERN_TIME_ZONE);
+}
+
+function formatDisplayClock(easternNow, timezone) {
+  const referenceDate = devModeUnlocked && debugTimeOverride
+    ? zonedWallTimeToDate(easternNow.date, easternNow.time, EASTERN_TIME_ZONE)
+    : new Date();
+  return formatInstantDateTimeForDisplay(referenceDate, timezone);
+}
+
+function formatEasternDateTimeForDisplay(date, time) {
+  return formatInstantDateTimeForDisplay(zonedWallTimeToDate(date, time, EASTERN_TIME_ZONE));
+}
+
+function formatEasternTimeForDisplay(date, time) {
+  return formatInstantTimeForDisplay(zonedWallTimeToDate(date, time, EASTERN_TIME_ZONE));
+}
+
+function formatInstantDateTimeForDisplay(date, timezone = getSelectedDisplayTimezone()) {
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone.timeZone,
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const abbreviation = getTimezoneAbbreviation(date, timezone);
+  return `${values.month} ${Number(values.day)}, ${values.year} · ${values.hour}:${values.minute} ${abbreviation}`;
+}
+
+function formatInstantTimeForDisplay(date, timezone = getSelectedDisplayTimezone()) {
+  if (Number.isNaN(date.getTime())) {
+    return "--:--";
+  }
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone.timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const abbreviation = getTimezoneAbbreviation(date, timezone);
+  return `${values.hour}:${values.minute} ${abbreviation}`;
+}
+
+function getZonedDateTimeParts(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    date: `${values.year}-${values.month}-${values.day}`,
+    time: `${values.hour}:${values.minute}`
+  };
+}
+
+function getTimezoneAbbreviation(date, timezone) {
+  if (timezone.id === "utc") {
+    return "UTC";
+  }
+  if (timezone.id === "ist") {
+    return "IST";
+  }
+
+  const offsetMinutes = getTimeZoneOffsetMinutes(date, timezone.timeZone);
+  if (timezone.id === "et") {
+    return offsetMinutes === -300 ? "EST" : "EDT";
+  }
+  if (timezone.id === "london") {
+    return offsetMinutes === 60 ? "BST" : "GMT";
+  }
+
+  return timezone.id.toUpperCase();
+}
+
+function getTimeZoneOffsetMinutes(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const localAsUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second)
+  );
+  return Math.round((localAsUtc - date.getTime()) / 60000);
+}
+
+function zonedWallTimeToDate(date, time, timeZone) {
+  const [year, month, day] = date.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const targetUtc = Date.UTC(year, month - 1, day, hour, minute);
+  let timestamp = targetUtc;
+
+  for (let index = 0; index < 3; index += 1) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(new Date(timestamp));
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    const formattedUtc = Date.UTC(
+      Number(values.year),
+      Number(values.month) - 1,
+      Number(values.day),
+      Number(values.hour),
+      Number(values.minute)
+    );
+    timestamp += targetUtc - formattedUtc;
+  }
+
+  return new Date(timestamp);
+}
+
+function formatDisplayDate(date) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  }).format(parseDate(date));
+}
+
+function isValidDateInput(date) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && formatDate(parseDate(date)) === date;
+}
+
+function isValidTimeInput(time) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(time);
 }
 
 function getWeekDates(date) {
@@ -1958,6 +4587,23 @@ function minutesToTime(totalMinutes) {
   const hours = Math.floor(normalized / 60).toString().padStart(2, "0");
   const minutes = (normalized % 60).toString().padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+function formatWaitDuration(totalMinutes) {
+  const minutesUntilAvailable = Math.max(0, Math.round(totalMinutes));
+  if (minutesUntilAvailable === 0) {
+    return "now";
+  }
+
+  if (minutesUntilAvailable < 60) {
+    return `${minutesUntilAvailable} min${minutesUntilAvailable === 1 ? "" : "s"}`;
+  }
+
+  const hours = Math.floor(minutesUntilAvailable / 60);
+  const minutes = minutesUntilAvailable % 60;
+  return minutes === 0
+    ? `${hours}hr${hours === 1 ? "" : "s"}`
+    : `${hours}hr${hours === 1 ? "" : "s"} ${String(minutes).padStart(2, "0")} mins`;
 }
 
 function roundToNearestSlot(minutes) {

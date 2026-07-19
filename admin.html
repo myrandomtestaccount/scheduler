@@ -4,21 +4,54 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SME Scheduler Admin</title>
+    <script>
+      (() => {
+        const themeKey = "smeScheduler.theme.v1";
+        const savedTheme = localStorage.getItem(themeKey);
+        const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : savedTheme === "light" || savedTheme === "bright" ? "light" : prefersDark ? "dark" : "light";
+      })();
+    </script>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <header class="hero">
-      <div>
+      <div class="hero-topbar">
+        <a class="brand-lockup" href="index.html" aria-label="Go to assignment queue">
+          <span class="logo-symbol" aria-hidden="true"></span>
+          <span class="logo-wordmark">SME Queue</span>
+        </a>
+        <div class="hero-actions">
+          <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color mode">
+            <span data-theme-toggle-icon>☀</span>
+            <span data-theme-toggle-text>Light</span>
+          </button>
+          <div class="time-card time-zone-card">
+            <select id="displayTimezoneSelect" class="time-zone-select" aria-label="Clock timezone"></select>
+          </div>
+          <div id="debugTimeCard" class="debug-time-card hidden">
+            <div class="debug-time-fields">
+              <label class="field mini-field">
+                <span>Date</span>
+                <input id="debugDateInput" type="date">
+              </label>
+              <label class="field mini-field">
+                <span>Time ET</span>
+                <input id="debugTimeInput" type="time">
+              </label>
+            </div>
+            <div class="debug-time-actions">
+              <button id="applyDebugTimeButton" class="secondary-button" type="button">Use</button>
+              <button id="resetDebugTimeButton" class="secondary-button" type="button">Live</button>
+            </div>
+            <p id="debugTimeStatus" class="debug-time-status hidden"></p>
+          </div>
+          <a class="secondary-link" href="index.html" aria-label="Back to assignment queue">Queue</a>
+        </div>
+      </div>
+      <div class="hero-copy">
         <p class="eyebrow">Admin page</p>
         <h1>Scheduler Admin Tools</h1>
-        <p class="subtitle">Manage users, schedules, coverage, breaks, extra slots, and holidays.</p>
-      </div>
-      <div class="hero-actions">
-        <div class="time-card">
-          <span>Current Eastern Time</span>
-          <strong id="currentEtTime">--</strong>
-        </div>
-        <a class="secondary-link" href="index.html">Back to assignment queue</a>
       </div>
     </header>
 
@@ -37,31 +70,31 @@
           <label class="tab-select-label">
             <span class="sr-only">Other admin sections</span>
             <select id="otherAdminSelect" class="tab-select" aria-label="Other admin sections">
-              <option value="">Other…</option>
-              <option value="rules">Assignment rules</option>
-              <option value="users">Users</option>
-              <option value="shifts">Shift presets</option>
-              <option value="systems">Systems / apps and mappings</option>
-              <option value="data">Data / backup</option>
+              <option value="">More…</option>
+              <option value="rules">Rules</option>
+              <option value="users">Team</option>
+              <option value="shifts">Shifts</option>
+              <option value="systems">Coverage</option>
+              <option value="data">Backup</option>
             </select>
           </label>
         </div>
 
         <section id="usersTab" class="tab-panel" data-lockable-admin-tab="users">
-          <form id="addUserForm" class="inline-form">
+          <form id="addUserForm" class="inline-form team-add-form">
             <label class="field">
-              <span>User name</span>
-              <input id="userNameInput" type="text" placeholder="Example: Alice Morgan" required>
+              <span>Add new team member</span>
+              <input id="userNameInput" type="text" placeholder="Enter team member name" autocomplete="off" required>
             </label>
-            <button class="primary-button" type="submit">Add user</button>
+            <button class="primary-button" type="submit">Add team member</button>
           </form>
-          <div id="usersList" class="stack-list"></div>
+          <div id="usersList" class="stack-list team-list"></div>
         </section>
 
         <section id="schedulesTab" class="tab-panel active">
           <div class="admin-grid">
             <form id="addScheduleForm" class="schedule-form card-form">
-              <h3>Add schedule</h3>
+              <h3 id="scheduleFormTitle">Add schedule</h3>
               <label class="field">
                 <span>User</span>
                 <select id="scheduleUserSelect"></select>
@@ -70,36 +103,44 @@
                 <span>Quick shift</span>
                 <select id="shiftTemplateSelect"></select>
               </label>
-              <fieldset>
-                <legend>Days in Eastern Time</legend>
+              <div class="two-columns">
+                <label class="field">
+                  <span>First Monday</span>
+                  <input id="scheduleStartDateInput" type="date" required>
+                </label>
+                <label class="field">
+                  <span>Last Friday</span>
+                  <input id="scheduleEndDateInput" type="date" required>
+                </label>
+              </div>
+              <fieldset class="day-picker">
+                <legend id="scheduleDaysLegend">Schedule days</legend>
                 <div id="dayCheckboxes" class="checkbox-grid"></div>
               </fieldset>
               <div class="two-columns">
                 <label class="field">
-                  <span>Start</span>
+                  <span id="scheduleStartLabel">Start</span>
                   <input id="scheduleStartInput" type="time" value="09:00" required>
                 </label>
                 <label class="field">
-                  <span>End</span>
+                  <span id="scheduleEndLabel">End</span>
                   <input id="scheduleEndInput" type="time" value="17:00" required>
                 </label>
               </div>
-              <label class="field">
-                <span>Priority</span>
-                <input id="schedulePriorityInput" type="number" min="1" step="1" value="1" required>
-              </label>
-              <button class="primary-button" type="submit">Add schedule</button>
-              <p class="help-text">Use a preset to save time, or choose custom times. Click the graph to prefill a user, day, and time.</p>
+              <div class="schedule-form-actions">
+                <button id="scheduleSubmitButton" class="primary-button" type="submit">Add schedule</button>
+                <button id="cancelScheduleEditButton" class="secondary-button hidden" type="button">Cancel</button>
+              </div>
             </form>
 
             <div class="card-form">
-              <h3>Schedule graph</h3>
+              <h3 id="scheduleGraphTitle">Schedule graph</h3>
               <div class="two-columns">
                 <label class="field">
                   <span>View</span>
                   <select id="scheduleViewSelect">
-                    <option value="day">Day view · all users</option>
-                    <option value="week">Week view · all users</option>
+                    <option value="day">Day view</option>
+                    <option value="week" selected>Week view</option>
                   </select>
                 </label>
                 <label class="field">
@@ -107,14 +148,22 @@
                   <input id="timelineDateInput" type="date">
                 </label>
               </div>
-              <div id="graphDateHelp" class="timeline-help">Day view shows this exact date. Click a user row to prefill a 30-minute schedule.</div>
               <div id="timelineCanvas" class="schedule-graph" aria-label="Schedule graph"></div>
+              <div id="timelineDraftActions" class="timeline-draft-actions hidden" aria-live="polite">
+                <div>
+                  <strong id="timelineDraftTitle"></strong>
+                  <span id="timelineDraftMeta" class="meta"></span>
+                </div>
+                <div class="timeline-draft-buttons">
+                  <button id="saveTimelineDraftButton" class="primary-button" type="button">Save schedule</button>
+                  <button id="clearTimelineDraftButton" class="secondary-button" type="button">Clear</button>
+                </div>
+              </div>
             </div>
 
             <section class="card-form wide-card">
               <div>
                 <h3>Breaks and extra slots</h3>
-                <p class="help-text">Add one-off breaks, doctor visits, or extra coverage for a specific date.</p>
               </div>
               <form id="addSlotForm" class="slot-form">
                 <div class="two-columns">
@@ -127,26 +176,19 @@
                     <input id="slotDateInput" type="date" required>
                   </label>
                 </div>
-                <div class="three-columns">
+                <div class="two-columns">
                   <label class="field">
-                    <span>Slot type</span>
-                    <select id="slotTypeSelect">
-                      <option value="break">Break / doctor visit</option>
-                      <option value="extra">Extra coverage slot</option>
-                    </select>
-                  </label>
-                  <label class="field">
-                    <span>Start</span>
+                    <span id="slotStartLabel">Start</span>
                     <input id="slotStartInput" type="time" value="12:00" required>
                   </label>
                   <label class="field">
-                    <span>End</span>
+                    <span id="slotEndLabel">End</span>
                     <input id="slotEndInput" type="time" value="12:30" required>
                   </label>
                 </div>
                 <label class="field">
-                  <span>Reason / note</span>
-                  <input id="slotReasonInput" type="text" placeholder="Example: Doctor visit">
+                  <span>Comment</span>
+                  <input id="slotReasonInput" type="text" required>
                 </label>
                 <button class="primary-button" type="submit">Add timeline slot</button>
               </form>
@@ -163,47 +205,52 @@
           <form id="assignmentRulesForm" class="card-form">
             <div>
               <p class="eyebrow">Assignment policy</p>
-              <h3>Who should be recommended first?</h3>
-              <p class="help-text">Default is schedule-first. Change this only if the team wants fairness or app expertise to lead the recommendation.</p>
+              <h3>Recommendation priority</h3>
             </div>
-            <label class="field">
-              <span>Recommendation style</span>
-              <select id="assignmentPolicySelect"></select>
-            </label>
-            <div id="assignmentPolicyHelp" class="policy-help"></div>
+            <div id="assignmentPolicyDescriptions" class="policy-description-list"></div>
             <button class="primary-button" type="submit">Save assignment rules</button>
           </form>
         </section>
 
         <section id="shiftsTab" class="tab-panel" data-lockable-admin-tab="shifts">
-          <form id="addShiftForm" class="inline-form">
-            <label class="field">
-              <span>Preset name</span>
-              <input id="shiftNameInput" type="text" placeholder="Example: Mid shift" required>
+          <section class="shift-current-section">
+            <div class="shift-section-heading">
+              <h3>Current shifts</h3>
+              <button id="showAddShiftButton" class="primary-button" type="button" aria-expanded="false" aria-controls="addShiftForm">Add shift</button>
+            </div>
+            <div id="shiftsList" class="stack-list shift-list"></div>
+          </section>
+          <form id="addShiftForm" class="inline-form shift-add-form hidden">
+            <div class="shift-form-heading">
+              <h3>New shift</h3>
+            </div>
+            <label class="field shift-name-control">
+              <span>Shift name</span>
+              <input id="shiftNameInput" type="text" required>
             </label>
-            <label class="field">
-              <span>Start</span>
+            <label class="field shift-time-control">
+              <span id="shiftStartLabel">Start</span>
               <input id="shiftStartInput" type="time" value="09:00" required>
             </label>
-            <label class="field">
-              <span>End</span>
+            <label class="field shift-time-control">
+              <span id="shiftEndLabel">End</span>
               <input id="shiftEndInput" type="time" value="17:00" required>
             </label>
-            <button class="primary-button" type="submit">Add shift preset</button>
+            <div class="shift-add-actions">
+              <button class="primary-button" type="submit">Save shift</button>
+              <button id="cancelAddShiftButton" class="secondary-button" type="button">Cancel</button>
+            </div>
           </form>
-          <p class="help-text">Presets only speed up schedule entry. Any user can still have a custom shift on any day.</p>
-          <div id="shiftsList" class="stack-list"></div>
         </section>
 
         <section id="systemsTab" class="tab-panel" data-lockable-admin-tab="systems">
           <form id="addSystemForm" class="inline-form">
             <label class="field">
               <span>System / app name</span>
-              <input id="systemNameInput" type="text" placeholder="Example: External System" required>
+              <input id="systemNameInput" type="text" required>
             </label>
             <button class="primary-button" type="submit">Add system</button>
           </form>
-          <p class="help-text">Checked users are primary SMEs. Their order below controls the rotation queue.</p>
           <div id="systemsList" class="stack-list"></div>
         </section>
 
@@ -219,11 +266,10 @@
             </label>
             <label class="field">
               <span>Holiday / note</span>
-              <input id="holidayNameInput" type="text" placeholder="Example: PTO">
+              <input id="holidayNameInput" type="text">
             </label>
             <button class="primary-button" type="submit">Add holiday</button>
           </form>
-          <p class="help-text">Use “All users” for team holidays. Holidays remove users from availability for that date.</p>
           <div id="holidaysList" class="stack-list"></div>
         </section>
 
@@ -236,7 +282,6 @@
             </label>
             <button id="resetButton" class="danger-button" type="button">Reset sample data</button>
           </div>
-          <p class="help-text">The app saves automatically in this browser. Export JSON before moving data to another computer.</p>
           <textarea id="dataPreview" readonly></textarea>
         </section>
       </section>
@@ -245,6 +290,123 @@
     <div id="saveToast" class="save-toast" role="status" aria-live="polite" aria-hidden="true">
       <span class="save-toast-icon">✓</span>
       <span id="saveToastText">Saved</span>
+    </div>
+
+    <div id="devModeModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="devModeModalTitle" aria-describedby="devModeModalImpact">
+      <div class="speed-bump-card backup-speed-bump-card">
+        <div class="speed-bump-icon backup-speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Developer mode</p>
+          <h2 id="devModeModalTitle">Use test time?</h2>
+          <p id="devModeModalImpact" class="speed-bump-impact backup-caution-callout">This is for developers only to test schedule and queue behavior.</p>
+          <ul class="backup-risk-list">
+            <li>It changes the app’s effective date and time in this browser.</li>
+            <li>Test time is entered in Eastern time.</li>
+          </ul>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="cancelDevModeButton" class="secondary-button" type="button">Cancel</button>
+          <button id="confirmDevModeButton" class="danger-button" type="button">Enter dev mode</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="syncStateModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="syncStateModalTitle" aria-describedby="syncStateModalMessage">
+      <div class="speed-bump-card">
+        <div class="speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Shared config</p>
+          <h2 id="syncStateModalTitle">Shared data changed</h2>
+          <p id="syncStateModalMessage" class="speed-bump-impact"></p>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="closeSyncStateModalButton" class="primary-button" type="button">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="removeUserModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="removeUserModalTitle" aria-describedby="removeUserModalImpact">
+      <div class="speed-bump-card">
+        <div class="speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Confirm removal</p>
+          <h2 id="removeUserModalTitle">Remove team member?</h2>
+          <p id="removeUserModalName" class="speed-bump-name"></p>
+          <p id="removeUserModalImpact" class="speed-bump-impact"></p>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="cancelRemoveUserButton" class="secondary-button" type="button">Keep team member</button>
+          <button id="confirmRemoveUserButton" class="danger-button" type="button">Remove team member</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="removeShiftModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="removeShiftModalTitle" aria-describedby="removeShiftModalImpact">
+      <div class="speed-bump-card">
+        <div class="speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Confirm removal</p>
+          <h2 id="removeShiftModalTitle">Remove shift?</h2>
+          <p id="removeShiftModalName" class="speed-bump-name"></p>
+          <p id="removeShiftModalImpact" class="speed-bump-impact"></p>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="cancelRemoveShiftButton" class="secondary-button" type="button">Keep shift</button>
+          <button id="confirmRemoveShiftButton" class="danger-button" type="button">Remove shift</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="removeScheduleModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="removeScheduleModalTitle" aria-describedby="removeScheduleModalImpact">
+      <div class="speed-bump-card">
+        <div class="speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Confirm removal</p>
+          <h2 id="removeScheduleModalTitle">Remove schedule?</h2>
+          <p id="removeScheduleModalName" class="speed-bump-name"></p>
+          <p id="removeScheduleModalImpact" class="speed-bump-impact"></p>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="cancelRemoveScheduleButton" class="secondary-button" type="button">Cancel</button>
+          <button id="removeScheduleDayButton" class="danger-button" type="button">Remove this day</button>
+          <button id="removeScheduleAllButton" class="danger-button" type="button">Remove schedule</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="removeHolidayModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="removeHolidayModalTitle" aria-describedby="removeHolidayModalImpact">
+      <div class="speed-bump-card">
+        <div class="speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Confirm removal</p>
+          <h2 id="removeHolidayModalTitle">Remove holiday?</h2>
+          <p id="removeHolidayModalName" class="speed-bump-name"></p>
+          <p id="removeHolidayModalImpact" class="speed-bump-impact"></p>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="cancelRemoveHolidayButton" class="secondary-button" type="button">Keep holiday</button>
+          <button id="confirmRemoveHolidayButton" class="danger-button" type="button">Remove holiday</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="backupUnlockModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="backupUnlockModalTitle" aria-describedby="backupUnlockModalImpact">
+      <div class="speed-bump-card backup-speed-bump-card">
+        <div class="speed-bump-icon backup-speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Backup tools</p>
+          <h2 id="backupUnlockModalTitle">Unlock backup changes?</h2>
+          <p id="backupUnlockModalImpact" class="speed-bump-impact backup-caution-callout">Proceed only if you know exactly what you are doing.</p>
+          <ul class="backup-risk-list">
+            <li>Importing a file can overwrite the current scheduler data.</li>
+            <li>Resetting sample data can remove the setup you are using now.</li>
+          </ul>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="cancelBackupUnlockButton" class="secondary-button" type="button">Cancel</button>
+          <button id="confirmBackupUnlockButton" class="danger-button" type="button">I understand — unlock backup tools</button>
+        </div>
+      </div>
     </div>
 
     <script src="app.js"></script>

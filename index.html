@@ -4,14 +4,54 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SME Scheduler</title>
+    <script>
+      (() => {
+        const themeKey = "smeScheduler.theme.v1";
+        const savedTheme = localStorage.getItem(themeKey);
+        const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : savedTheme === "light" || savedTheme === "bright" ? "light" : prefersDark ? "dark" : "light";
+      })();
+    </script>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <header class="hero primary-hero">
-      <div>
+      <div class="hero-topbar">
+        <a class="brand-lockup" href="index.html" aria-label="Go to assignment queue">
+          <span class="logo-symbol" aria-hidden="true"></span>
+          <span class="logo-wordmark">SME Queue</span>
+        </a>
+        <div class="hero-actions">
+          <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color mode">
+            <span data-theme-toggle-icon>☀</span>
+            <span data-theme-toggle-text>Light</span>
+          </button>
+          <div class="time-card compact-time-card time-zone-card">
+            <select id="displayTimezoneSelect" class="time-zone-select" aria-label="Clock timezone"></select>
+          </div>
+          <div id="debugTimeCard" class="debug-time-card hidden">
+            <div class="debug-time-fields">
+              <label class="field mini-field">
+                <span>Date</span>
+                <input id="debugDateInput" type="date">
+              </label>
+              <label class="field mini-field">
+                <span>Time ET</span>
+                <input id="debugTimeInput" type="time">
+              </label>
+            </div>
+            <div class="debug-time-actions">
+              <button id="applyDebugTimeButton" class="secondary-button" type="button">Use</button>
+              <button id="resetDebugTimeButton" class="secondary-button" type="button">Live</button>
+            </div>
+            <p id="debugTimeStatus" class="debug-time-status hidden"></p>
+          </div>
+          <a class="secondary-link" href="admin.html">Admin tools</a>
+        </div>
+      </div>
+      <div class="hero-copy">
         <p class="eyebrow">Primary user view</p>
         <h1>SME Assignment Queue</h1>
-        <p class="subtitle">Choose a system, review today’s queue, and assign the right SME.</p>
       </div>
     </header>
 
@@ -20,45 +60,90 @@
         <div class="assignment-header">
           <div>
             <p class="eyebrow">Assign task</p>
-            <h2>Coverage queue</h2>
-          </div>
-          <div class="assignment-toolbar">
-            <div class="time-card compact-time-card">
-              <span>Current Eastern Time</span>
-              <strong id="currentEtTime">--</strong>
-            </div>
-            <a class="secondary-link" href="admin.html">Admin tools</a>
+            <h2 id="assignmentQueueTitle">Coverage queue</h2>
           </div>
         </div>
 
-        <label class="field large-field">
-          <span>System / app</span>
+        <label class="field large-field coverage-picker">
+          <span class="sr-only">System / app</span>
           <select id="assignmentSystemSelect"></select>
         </label>
 
-        <div id="suggestionCard" class="suggestion-card"></div>
-
-        <div class="section-heading tight">
-          <div>
-            <h3>Today’s assigned SME queue</h3>
-            <p class="help-text">Available users are highlighted. Later-starting users are grayed out but can still be picked manually.</p>
+        <section id="queueSection" class="assignment-section queue-section hidden">
+          <div class="section-heading tight">
+            <div>
+              <h3>Current queue</h3>
+            </div>
           </div>
-        </div>
-        <div id="queueList" class="queue-grid"></div>
+          <div id="queueList" class="queue-tube"></div>
 
-        <div class="assignment-actions">
-          <button id="markAssignedButton" class="primary-button" type="button">Mark selected user assigned</button>
-          <p id="selectedAssigneeText" class="help-text">Select a user from the queue.</p>
-        </div>
+          <div class="assignment-actions">
+            <button id="markAssignedButton" class="primary-button" type="button">Mark selected user assigned</button>
+          </div>
+          <div id="assignmentConfirmation" class="assignment-confirmation hidden" aria-live="polite"></div>
+        </section>
 
-        <h3>Today’s ticket ownership</h3>
-        <p class="help-text">Current ranking by tickets assigned today.</p>
-        <div id="dailyRankingsList" class="ranking-list"></div>
+        <section class="assignment-section">
+          <div class="section-heading tight">
+            <div>
+              <h3>Today’s ticket ownership</h3>
+            </div>
+          </div>
+          <div id="dailyRankingsList" class="ranking-list"></div>
+        </section>
 
-        <h3>Recent assignments</h3>
-        <div id="assignmentLog" class="stack-list compact"></div>
+        <section id="activityPanelSection" class="assignment-section activity-panel-section">
+          <div class="section-heading tight">
+            <div></div>
+            <div class="activity-toggle-actions">
+              <button id="toggleQueueDashboardButton" class="secondary-button" type="button">Show all queues</button>
+              <button id="toggleRecentAssignmentsButton" class="secondary-button" type="button">Show recent tickets</button>
+            </div>
+          </div>
+          <div id="queueDashboardPanel" class="queue-dashboard-panel hidden">
+            <h3>Coverage dashboard</h3>
+            <div id="queueDashboardList" class="queue-dashboard-grid"></div>
+          </div>
+          <div id="recentAssignmentsPanel" class="recent-assignments-panel hidden">
+            <h3>Recent assignments</h3>
+            <div id="assignmentLog" class="stack-list compact"></div>
+          </div>
+        </section>
       </section>
     </main>
+
+    <div id="devModeModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="devModeModalTitle" aria-describedby="devModeModalImpact">
+      <div class="speed-bump-card backup-speed-bump-card">
+        <div class="speed-bump-icon backup-speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Developer mode</p>
+          <h2 id="devModeModalTitle">Use test time?</h2>
+          <p id="devModeModalImpact" class="speed-bump-impact backup-caution-callout">This is for developers only to test queue behavior.</p>
+          <ul class="backup-risk-list">
+            <li>It changes the app’s effective date and time in this browser.</li>
+            <li>Do not use it while making real task assignments.</li>
+          </ul>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="cancelDevModeButton" class="secondary-button" type="button">Cancel</button>
+          <button id="confirmDevModeButton" class="danger-button" type="button">Enter dev mode</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="syncStateModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="syncStateModalTitle" aria-describedby="syncStateModalMessage">
+      <div class="speed-bump-card">
+        <div class="speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Shared config</p>
+          <h2 id="syncStateModalTitle">Shared data changed</h2>
+          <p id="syncStateModalMessage" class="speed-bump-impact"></p>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="closeSyncStateModalButton" class="primary-button" type="button">OK</button>
+        </div>
+      </div>
+    </div>
 
     <script src="app.js"></script>
   </body>
