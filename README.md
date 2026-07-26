@@ -28,11 +28,15 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 - SMEs who are scheduled later today are grayed out with their login time and can still be picked manually.
 - SMEs who are not scheduled, done for the day, or on holiday are disabled.
 - Mark a selected SME assigned and advance the queue.
+- Each coverage queue ends with `Other`, which lets the delegator pick from the current global roster without advancing the SME queue.
 - See today’s ticket ownership ranking on the main page.
 - Admin tools live on a separate `admin.html` page.
 - Admins can add/remove users, systems/apps, schedules, breaks, extra slots, and holidays.
+- Admins can turn regional separation on/off, define regions, and assign each user to one or more regions.
+- Admins can define coverage time slots, assign one delegator to each slot/date, and review them in day/week graph views.
 - Admins can choose an assignment recommendation style: schedule-first, balanced, or app expertise first.
 - Admin setup sections are locked by default; unlock before editing users, holidays, shift presets, systems/apps, assignment rules, or data backups.
+- Date/time ranges are always stored and displayed from older to newer; reverse start/end entries are rejected.
 - Admins can define what shift presets like `Early`, `Regular`, and `Late` mean.
 - Shift presets only save time; any user can still have a custom shift on any day.
 - Schedules support different shifts for the same user on different days.
@@ -77,7 +81,9 @@ Click `Admin tools` from the main page, or open `admin.html` directly.
 Admin sections:
 
 - `Users`: add/remove team members.
+- `Regions`: choose whether to separate users by region, then define the region list used in Team and queue views.
 - `Schedules`: add weekly schedules, click the all-user graph to prefill user/day/time, add breaks, add extra coverage slots, and review readable user-by-user schedules.
+- `Delegation`: define predefined coverage time slots, assign a delegator or leave a slot/date unassigned, and review the day/week graph.
 - `Assignment rules`: choose how recommendations are sorted. The default is schedule-first.
 - `Shift presets`: define reusable shift names and times.
 - `Systems / apps`: add systems and assign/reorder primary SMEs.

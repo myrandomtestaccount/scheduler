@@ -18,7 +18,7 @@
     <header class="hero">
       <div class="hero-topbar">
         <a class="brand-lockup" href="index.html" aria-label="Go to assignment queue">
-          <span class="logo-symbol" aria-hidden="true"></span>
+          <img src="logo.png" alt="" aria-hidden="true" class="logo-img">
           <span class="logo-wordmark">SME Queue</span>
         </a>
         <div class="hero-actions">
@@ -46,12 +46,9 @@
             </div>
             <p id="debugTimeStatus" class="debug-time-status hidden"></p>
           </div>
+          <button id="contactDevButton" class="secondary-button" type="button">Contact</button>
           <a class="secondary-link" href="index.html" aria-label="Back to assignment queue">Queue</a>
         </div>
-      </div>
-      <div class="hero-copy">
-        <p class="eyebrow">Admin page</p>
-        <h1>Scheduler Admin Tools</h1>
       </div>
     </header>
 
@@ -66,6 +63,7 @@
 
         <div class="tabs" role="tablist" aria-label="Admin sections">
           <button class="tab-button active" type="button" data-tab="schedules">Schedules</button>
+          <button class="tab-button" type="button" data-tab="delegations">Delegation</button>
           <button class="tab-button" type="button" data-tab="holidays">Holidays</button>
           <label class="tab-select-label">
             <span class="sr-only">Other admin sections</span>
@@ -73,8 +71,10 @@
               <option value="">More…</option>
               <option value="rules">Rules</option>
               <option value="users">Team</option>
+              <option value="regions">Regions</option>
               <option value="shifts">Shifts</option>
               <option value="systems">Coverage</option>
+              <option value="timezones">Time zones</option>
               <option value="data">Backup</option>
             </select>
           </label>
@@ -89,6 +89,25 @@
             <button class="primary-button" type="submit">Add team member</button>
           </form>
           <div id="usersList" class="stack-list team-list"></div>
+        </section>
+
+        <section id="regionsTab" class="tab-panel" data-lockable-admin-tab="regions">
+          <div class="region-mode-row">
+            <span class="item-title">Regions enabled</span>
+            <label class="toggle-switch">
+              <input id="regionsEnabledInput" type="checkbox">
+              <span class="toggle-slider" aria-hidden="true"></span>
+              <span id="regionsEnabledLabel">Yes</span>
+            </label>
+          </div>
+          <form id="addRegionForm" class="inline-form">
+            <label class="field">
+              <span>Region name</span>
+              <input id="regionNameInput" type="text" placeholder="Enter region name" autocomplete="off" required>
+            </label>
+            <button class="primary-button" type="submit">Add region</button>
+          </form>
+          <div id="regionsList" class="stack-list"></div>
         </section>
 
         <section id="schedulesTab" class="tab-panel active">
@@ -201,6 +220,58 @@
           </div>
         </section>
 
+        <section id="delegationsTab" class="tab-panel">
+          <div class="admin-grid">
+            <div class="card-form wide-card">
+              <div class="section-heading tight">
+                <div>
+                  <p class="eyebrow">Delegation</p>
+                  <h3 id="delegationGraphTitle">Delegation ownership</h3>
+                </div>
+                <button id="toggleDelegationSlotEditorButton" class="secondary-button" type="button">Edit time slots</button>
+              </div>
+              <div class="two-columns">
+                <label class="field">
+                  <span>View</span>
+                  <select id="delegationViewSelect">
+                    <option value="day" selected>Day view</option>
+                    <option value="week">Week view</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span id="delegationGraphDateLabel">Delegation date</span>
+                  <input id="delegationGraphDateInput" type="date">
+                </label>
+              </div>
+              <div id="delegationCanvas" class="delegation-assignment-board day-board" aria-label="Delegation ownership board"></div>
+              <button id="saveDelegationAssignmentsButton" class="primary-button" type="button">Save delegation ownership</button>
+            </div>
+
+            <div id="delegationSlotEditor" class="card-form delegation-slot-editor hidden">
+              <div class="section-heading tight">
+                <div>
+                  <p class="eyebrow">Delegation setup</p>
+                  <h3>Time slots</h3>
+                </div>
+                <button id="closeDelegationSlotEditorButton" class="secondary-button" type="button">Done</button>
+              </div>
+
+              <form id="addDelegationSlotForm" class="delegation-slot-editor-form">
+                <label class="field compact-time-field">
+                  <span id="delegationStartLabel">Start</span>
+                  <input id="delegationStartInput" type="time" value="09:00" step="1800" required>
+                </label>
+                <label class="field compact-time-field">
+                  <span id="delegationEndLabel">End</span>
+                  <input id="delegationEndInput" type="time" value="09:30" step="1800" required>
+                </label>
+                <button class="primary-button" type="submit">Add</button>
+              </form>
+              <div id="delegationSlotsList" class="stack-list compact"></div>
+            </div>
+          </div>
+        </section>
+
         <section id="rulesTab" class="tab-panel" data-lockable-admin-tab="rules">
           <form id="assignmentRulesForm" class="card-form">
             <div>
@@ -271,6 +342,20 @@
             <button class="primary-button" type="submit">Add holiday</button>
           </form>
           <div id="holidaysList" class="stack-list"></div>
+        </section>
+
+        <section id="timezonesTab" class="tab-panel" data-lockable-admin-tab="timezones">
+          <p class="eyebrow">Time zones</p>
+          <h3>Display timezones</h3>
+          <p class="meta">Select which timezones appear in the clock dropdown.</p>
+          <div id="timezoneList" class="stack-list"></div>
+          <form id="addTimezoneForm" class="inline-form">
+            <label class="field">
+              <span>Add timezone</span>
+              <select id="addTimezoneSelect"></select>
+            </label>
+            <button class="primary-button" type="submit">Add</button>
+          </form>
         </section>
 
         <section id="dataTab" class="tab-panel" data-lockable-admin-tab="data">
@@ -405,6 +490,58 @@
         <div class="speed-bump-actions">
           <button id="cancelBackupUnlockButton" class="secondary-button" type="button">Cancel</button>
           <button id="confirmBackupUnlockButton" class="danger-button" type="button">I understand — unlock backup tools</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="genericAlertModal" class="speed-bump-overlay hidden" role="alertdialog" aria-modal="true" aria-hidden="true" aria-labelledby="genericAlertModalTitle" aria-describedby="genericAlertModalMessage">
+      <div class="speed-bump-card">
+        <div class="speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Notice</p>
+          <h2 id="genericAlertModalTitle">Notice</h2>
+          <p id="genericAlertModalMessage" class="speed-bump-impact"></p>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="closeGenericAlertButton" class="primary-button" type="button">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="genericConfirmModal" class="speed-bump-overlay hidden" role="alertdialog" aria-modal="true" aria-hidden="true" aria-labelledby="genericConfirmModalTitle" aria-describedby="genericConfirmModalMessage">
+      <div class="speed-bump-card">
+        <div class="speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Confirm</p>
+          <h2 id="genericConfirmModalTitle">Are you sure?</h2>
+          <p id="genericConfirmModalMessage" class="speed-bump-impact"></p>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="cancelGenericConfirmButton" class="secondary-button" type="button">Cancel</button>
+          <button id="confirmGenericConfirmButton" class="danger-button" type="button">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="contactDevModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="contactDevModalTitle">
+      <div class="speed-bump-card contact-speed-bump-card">
+        <div class="speed-bump-icon contact-speed-bump-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M4.75 6.75h14.5v10.5H4.75z" />
+            <path d="m5.25 7.25 6.75 5.5 6.75-5.5" />
+          </svg>
+        </div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Contact</p>
+          <h2 id="contactDevModalTitle">Developer contact</h2>
+          <p class="speed-bump-impact">For questions, feedback, or support, reach out at:</p>
+          <div class="contact-email-copy">
+            <code id="contactEmailDisplay">abc@def.com</code>
+            <button id="copyContactEmailButton" class="secondary-button" type="button">Copy</button>
+          </div>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="closeContactDevModalButton" class="primary-button" type="button">Close</button>
         </div>
       </div>
     </div>

@@ -18,7 +18,7 @@
     <header class="hero primary-hero">
       <div class="hero-topbar">
         <a class="brand-lockup" href="index.html" aria-label="Go to assignment queue">
-          <span class="logo-symbol" aria-hidden="true"></span>
+          <img src="logo.png" alt="" aria-hidden="true" class="logo-img">
           <span class="logo-wordmark">SME Queue</span>
         </a>
         <div class="hero-actions">
@@ -46,12 +46,9 @@
             </div>
             <p id="debugTimeStatus" class="debug-time-status hidden"></p>
           </div>
-          <a class="secondary-link" href="admin.html">Admin tools</a>
+          <button id="contactDevButton" class="secondary-button" type="button">Contact</button>
+          <a class="secondary-link" href="admin.html">Admin</a>
         </div>
-      </div>
-      <div class="hero-copy">
-        <p class="eyebrow">Primary user view</p>
-        <h1>SME Assignment Queue</h1>
       </div>
     </header>
 
@@ -77,6 +74,13 @@
           </div>
           <div id="queueList" class="queue-tube"></div>
 
+          <div id="otherAssigneePicker" class="other-assignee-picker hidden">
+            <label class="field">
+              <span>Current global roster</span>
+              <select id="otherAssigneeSelect"></select>
+            </label>
+          </div>
+
           <div class="assignment-actions">
             <button id="markAssignedButton" class="primary-button" type="button">Mark selected user assigned</button>
           </div>
@@ -90,6 +94,15 @@
             </div>
           </div>
           <div id="dailyRankingsList" class="ranking-list"></div>
+        </section>
+
+        <section class="assignment-section">
+          <div class="section-heading tight">
+            <div>
+              <h3>Current delegator</h3>
+            </div>
+          </div>
+          <div id="delegationAssignmentsList" class="delegation-list"></div>
         </section>
 
         <section id="activityPanelSection" class="assignment-section activity-panel-section">
@@ -141,6 +154,58 @@
         </div>
         <div class="speed-bump-actions">
           <button id="closeSyncStateModalButton" class="primary-button" type="button">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="genericAlertModal" class="speed-bump-overlay hidden" role="alertdialog" aria-modal="true" aria-hidden="true" aria-labelledby="genericAlertModalTitle" aria-describedby="genericAlertModalMessage">
+      <div class="speed-bump-card">
+        <div class="speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Notice</p>
+          <h2 id="genericAlertModalTitle">Notice</h2>
+          <p id="genericAlertModalMessage" class="speed-bump-impact"></p>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="closeGenericAlertButton" class="primary-button" type="button">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="genericConfirmModal" class="speed-bump-overlay hidden" role="alertdialog" aria-modal="true" aria-hidden="true" aria-labelledby="genericConfirmModalTitle" aria-describedby="genericConfirmModalMessage">
+      <div class="speed-bump-card">
+        <div class="speed-bump-icon" aria-hidden="true">!</div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Confirm</p>
+          <h2 id="genericConfirmModalTitle">Are you sure?</h2>
+          <p id="genericConfirmModalMessage" class="speed-bump-impact"></p>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="cancelGenericConfirmButton" class="secondary-button" type="button">Cancel</button>
+          <button id="confirmGenericConfirmButton" class="danger-button" type="button">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="contactDevModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="contactDevModalTitle">
+      <div class="speed-bump-card contact-speed-bump-card">
+        <div class="speed-bump-icon contact-speed-bump-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M4.75 6.75h14.5v10.5H4.75z" />
+            <path d="m5.25 7.25 6.75 5.5 6.75-5.5" />
+          </svg>
+        </div>
+        <div class="speed-bump-copy">
+          <p class="eyebrow">Contact</p>
+          <h2 id="contactDevModalTitle">Developer contact</h2>
+          <p class="speed-bump-impact">For questions, feedback, or support, reach out at:</p>
+          <div class="contact-email-copy">
+            <code id="contactEmailDisplay">abc@def.com</code>
+            <button id="copyContactEmailButton" class="secondary-button" type="button">Copy</button>
+          </div>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="closeContactDevModalButton" class="primary-button" type="button">Close</button>
         </div>
       </div>
     </div>

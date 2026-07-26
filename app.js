@@ -16,14 +16,53 @@ const RECENT_ASSIGNMENTS_WINDOW_MS = 24 * 60 * 60 * 1000;
 const SHIFT_ORDER_PRESET_ID = "schedule-first";
 const SHIFT_QUEUE_SYSTEM_ID = "__shift_queue__";
 const SHIFT_QUEUE_SYSTEM_NAME = "Shift queue";
+const OTHER_QUEUE_USER_ID = "__other__";
+const OTHER_QUEUE_USER_NAME = "Other";
 const INCIDENT_CREATE_URL = "https://www.google.com/";
 const DEV_MODE_TIME_OPTION_ID = "__dev_mode__";
-const DISPLAY_TIMEZONES = [
-  { id: "et", timeZone: EASTERN_TIME_ZONE },
-  { id: "utc", timeZone: "UTC" },
-  { id: "london", timeZone: "Europe/London" },
-  { id: "ist", timeZone: "Asia/Kolkata" }
+const DEFAULT_DISPLAY_TIMEZONES = [
+  { id: "et", timeZone: EASTERN_TIME_ZONE, label: "Eastern (New York)" },
+  { id: "utc", timeZone: "UTC", label: "UTC" },
+  { id: "london", timeZone: "Europe/London", label: "London" },
+  { id: "ist", timeZone: "Asia/Kolkata", label: "India (Kolkata)" }
 ];
+
+const AVAILABLE_TIMEZONES = [
+  { id: "et", timeZone: "America/New_York", label: "Eastern (New York)" },
+  { id: "ct", timeZone: "America/Chicago", label: "Central (Chicago)" },
+  { id: "mt", timeZone: "America/Denver", label: "Mountain (Denver)" },
+  { id: "pt", timeZone: "America/Los_Angeles", label: "Pacific (Los Angeles)" },
+  { id: "ak", timeZone: "America/Anchorage", label: "Alaska" },
+  { id: "ht", timeZone: "Pacific/Honolulu", label: "Hawaii" },
+  { id: "utc", timeZone: "UTC", label: "UTC" },
+  { id: "london", timeZone: "Europe/London", label: "London" },
+  { id: "paris", timeZone: "Europe/Paris", label: "Paris / Prague" },
+  { id: "athens", timeZone: "Europe/Athens", label: "Athens / Helsinki" },
+  { id: "moscow", timeZone: "Europe/Moscow", label: "Moscow" },
+  { id: "istanbul", timeZone: "Europe/Istanbul", label: "Istanbul" },
+  { id: "dubai", timeZone: "Asia/Dubai", label: "Dubai" },
+  { id: "karachi", timeZone: "Asia/Karachi", label: "Karachi" },
+  { id: "ist", timeZone: "Asia/Kolkata", label: "India (Kolkata)" },
+  { id: "dhaka", timeZone: "Asia/Dhaka", label: "Dhaka" },
+  { id: "bangkok", timeZone: "Asia/Bangkok", label: "Bangkok / Hanoi" },
+  { id: "beijing", timeZone: "Asia/Shanghai", label: "Beijing / Singapore" },
+  { id: "tokyo", timeZone: "Asia/Tokyo", label: "Tokyo / Seoul" },
+  { id: "sydney", timeZone: "Australia/Sydney", label: "Sydney (east)" },
+  { id: "adelaide", timeZone: "Australia/Adelaide", label: "Adelaide (central)" },
+  { id: "perth", timeZone: "Australia/Perth", label: "Perth (west)" },
+  { id: "auckland", timeZone: "Pacific/Auckland", label: "Auckland" },
+  { id: "samoa", timeZone: "Pacific/Apia", label: "Samoa" }
+];
+
+const DEFAULT_REGIONS = [
+  { id: "amer", name: "Americas" },
+  { id: "emea", name: "EMEA" },
+  { id: "apac", name: "APAC" }
+];
+
+function getDisplayTimezones() {
+  return data?.displayTimezones?.length ? data.displayTimezones : DEFAULT_DISPLAY_TIMEZONES;
+}
 
 const DEFAULT_SHIFT_TEMPLATES = [
   { id: "early", name: "Early shift", start: "07:00", end: "15:00" },
@@ -58,6 +97,7 @@ const defaultData = {
     {
       id: "alice",
       name: "Alice",
+      regionIds: ["amer"],
       schedules: [
         { id: "alice-regular", shiftType: "regular", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "09:00", end: "17:00" }
       ]
@@ -65,6 +105,7 @@ const defaultData = {
     {
       id: "ben",
       name: "Ben",
+      regionIds: ["emea"],
       schedules: [
         { id: "ben-early", shiftType: "early", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "07:00", end: "15:00" }
       ]
@@ -72,6 +113,7 @@ const defaultData = {
     {
       id: "casey",
       name: "Casey",
+      regionIds: ["apac"],
       schedules: [
         { id: "casey-late", shiftType: "late", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "11:00", end: "19:00" }
       ]
@@ -87,6 +129,10 @@ const defaultData = {
   },
   shiftTemplates: DEFAULT_SHIFT_TEMPLATES,
   assignmentRules: DEFAULT_ASSIGNMENT_RULES,
+  displayTimezones: DEFAULT_DISPLAY_TIMEZONES,
+  regions: DEFAULT_REGIONS,
+  delegationSlots: [],
+  delegations: [],
   exceptions: [],
   holidays: [],
   assignmentLog: []
@@ -100,6 +146,7 @@ let sharedStateSaveQueue = Promise.resolve();
 let sharedStateSaveInProgress = false;
 let sharedStateGeneration = 0;
 let selectedAssigneeId = null;
+let selectedOtherAssigneeId = null;
 let initialDevModeRequested = isDevModeRequested();
 let debugTimeOverride = initialDevModeRequested ? loadDebugTimeOverride() : null;
 if (!initialDevModeRequested) {
@@ -121,7 +168,7 @@ let devModeUnlocked = initialDevModeRequested && Boolean(debugTimeOverride);
 let adminTimeInputsInitialized = false;
 let timelineDrafts = [];
 let timelineDrag = null;
-const OTHER_ADMIN_TABS = ["rules", "users", "shifts", "systems", "data"];
+const OTHER_ADMIN_TABS = ["rules", "users", "regions", "shifts", "systems", "timezones", "data"];
 const unlockedAdminTabs = new Set();
 let saveToastTimer = null;
 
@@ -176,6 +223,8 @@ const elements = {
   assignmentConfirmation: document.querySelector("#assignmentConfirmation"),
   queueSection: document.querySelector("#queueSection"),
   queueList: document.querySelector("#queueList"),
+  otherAssigneePicker: document.querySelector("#otherAssigneePicker"),
+  otherAssigneeSelect: document.querySelector("#otherAssigneeSelect"),
   dailyRankingsList: document.querySelector("#dailyRankingsList"),
   recentAssignmentsPanel: document.querySelector("#recentAssignmentsPanel"),
   activityPanelSection: document.querySelector("#activityPanelSection"),
@@ -187,6 +236,11 @@ const elements = {
   addUserForm: document.querySelector("#addUserForm"),
   userNameInput: document.querySelector("#userNameInput"),
   usersList: document.querySelector("#usersList"),
+  addRegionForm: document.querySelector("#addRegionForm"),
+  regionNameInput: document.querySelector("#regionNameInput"),
+  regionsEnabledInput: document.querySelector("#regionsEnabledInput"),
+  regionsEnabledLabel: document.querySelector("#regionsEnabledLabel"),
+  regionsList: document.querySelector("#regionsList"),
   addScheduleForm: document.querySelector("#addScheduleForm"),
   scheduleFormTitle: document.querySelector("#scheduleFormTitle"),
   scheduleSubmitButton: document.querySelector("#scheduleSubmitButton"),
@@ -225,6 +279,30 @@ const elements = {
   timelineDraftMeta: document.querySelector("#timelineDraftMeta"),
   saveTimelineDraftButton: document.querySelector("#saveTimelineDraftButton"),
   clearTimelineDraftButton: document.querySelector("#clearTimelineDraftButton"),
+  addDelegationSlotForm: document.querySelector("#addDelegationSlotForm"),
+  toggleDelegationSlotEditorButton: document.querySelector("#toggleDelegationSlotEditorButton"),
+  closeDelegationSlotEditorButton: document.querySelector("#closeDelegationSlotEditorButton"),
+  delegationSlotEditor: document.querySelector("#delegationSlotEditor"),
+  addDelegationForm: document.querySelector("#addDelegationForm"),
+  delegationSlotSelect: document.querySelector("#delegationSlotSelect"),
+  delegationSlotMeta: document.querySelector("#delegationSlotMeta"),
+  delegationUserSelect: document.querySelector("#delegationUserSelect"),
+  delegationDateInput: document.querySelector("#delegationDateInput"),
+  delegationStartInput: document.querySelector("#delegationStartInput"),
+  delegationEndInput: document.querySelector("#delegationEndInput"),
+  delegationStartLabel: document.querySelector("#delegationStartLabel"),
+  delegationEndLabel: document.querySelector("#delegationEndLabel"),
+  delegationNoteInput: document.querySelector("#delegationNoteInput"),
+  delegationViewSelect: document.querySelector("#delegationViewSelect"),
+  delegationGraphTitle: document.querySelector("#delegationGraphTitle"),
+  delegationGraphDateLabel: document.querySelector("#delegationGraphDateLabel"),
+  delegationGraphDateInput: document.querySelector("#delegationGraphDateInput"),
+  delegationCanvas: document.querySelector("#delegationCanvas"),
+  delegationAssignmentBoard: document.querySelector("#delegationAssignmentBoard"),
+  saveDelegationAssignmentsButton: document.querySelector("#saveDelegationAssignmentsButton"),
+  delegationSlotsList: document.querySelector("#delegationSlotsList"),
+  delegationsList: document.querySelector("#delegationsList"),
+  delegationAssignmentsList: document.querySelector("#delegationAssignmentsList"),
   addSlotForm: document.querySelector("#addSlotForm"),
   slotDateInput: document.querySelector("#slotDateInput"),
   slotStartInput: document.querySelector("#slotStartInput"),
@@ -242,7 +320,24 @@ const elements = {
   exportButton: document.querySelector("#exportButton"),
   importInput: document.querySelector("#importInput"),
   resetButton: document.querySelector("#resetButton"),
-  dataPreview: document.querySelector("#dataPreview")
+  dataPreview: document.querySelector("#dataPreview"),
+  contactDevButton: document.querySelector("#contactDevButton"),
+  contactDevModal: document.querySelector("#contactDevModal"),
+  closeContactDevModalButton: document.querySelector("#closeContactDevModalButton"),
+  copyContactEmailButton: document.querySelector("#copyContactEmailButton"),
+  contactEmailDisplay: document.querySelector("#contactEmailDisplay"),
+  genericAlertModal: document.querySelector("#genericAlertModal"),
+  genericAlertModalTitle: document.querySelector("#genericAlertModalTitle"),
+  genericAlertModalMessage: document.querySelector("#genericAlertModalMessage"),
+  closeGenericAlertButton: document.querySelector("#closeGenericAlertButton"),
+  genericConfirmModal: document.querySelector("#genericConfirmModal"),
+  genericConfirmModalTitle: document.querySelector("#genericConfirmModalTitle"),
+  genericConfirmModalMessage: document.querySelector("#genericConfirmModalMessage"),
+  cancelGenericConfirmButton: document.querySelector("#cancelGenericConfirmButton"),
+  confirmGenericConfirmButton: document.querySelector("#confirmGenericConfirmButton"),
+  timezoneList: document.querySelector("#timezoneList"),
+  addTimezoneForm: document.querySelector("#addTimezoneForm"),
+  addTimezoneSelect: document.querySelector("#addTimezoneSelect")
 };
 
 applyTheme(loadTheme());
@@ -280,7 +375,7 @@ function bindEvents() {
   });
 
   on(elements.assignmentSystemSelect, "change", () => {
-    selectedAssigneeId = null;
+    clearSelectedAssignee();
     lastAssignmentId = null;
     renderClockAndAssignment();
   });
@@ -299,11 +394,17 @@ function bindEvents() {
     }
   });
   on(elements.markAssignedButton, "click", markSelectedAssigned);
+  on(elements.otherAssigneeSelect, "change", () => {
+    selectedOtherAssigneeId = elements.otherAssigneeSelect.value || null;
+    renderClockAndAssignment();
+  });
   on(elements.applyDebugTimeButton, "click", applyDebugTimeOverride);
   on(elements.resetDebugTimeButton, "click", resetDebugTimeOverride);
   on(elements.toggleQueueDashboardButton, "click", toggleQueueDashboard);
   on(elements.toggleRecentAssignmentsButton, "click", toggleRecentAssignments);
   on(elements.addUserForm, "submit", addUser);
+  on(elements.addRegionForm, "submit", addRegion);
+  on(elements.regionsEnabledInput, "change", toggleRegionsEnabled);
   on(elements.cancelRemoveUserButton, "click", closeRemoveUserModal);
   on(elements.confirmRemoveUserButton, "click", confirmRemoveUser);
   on(elements.removeUserModal, "click", (event) => {
@@ -350,8 +451,11 @@ function bindEvents() {
   on(elements.shiftTemplateSelect, "change", applyShiftTemplate);
   on(elements.scheduleStartDateInput, "change", () => normalizeScheduleDateRangeInputs("start"));
   on(elements.scheduleEndDateInput, "change", () => normalizeScheduleDateRangeInputs("end"));
-  on(elements.scheduleStartInput, "input", () => elements.shiftTemplateSelect.value = "custom");
-  on(elements.scheduleEndInput, "input", () => elements.shiftTemplateSelect.value = "custom");
+  on(elements.scheduleStartInput, "input", () => {
+    elements.shiftTemplateSelect.value = "custom";
+    updateForwardTimeInputConstraints();
+  });
+  on(elements.scheduleEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.scheduleViewSelect, "change", renderTimezoneSensitiveAdminViews);
   on(elements.timelineUserSelect, "change", renderTimelineTools);
   on(elements.timelineDateInput, "change", () => {
@@ -364,12 +468,54 @@ function bindEvents() {
   on(elements.timelineCanvas, "click", prefillSlotFromTimeline);
   on(elements.saveTimelineDraftButton, "click", saveTimelineDraftSchedule);
   on(elements.clearTimelineDraftButton, "click", clearTimelineDraft);
+  on(elements.addDelegationSlotForm, "submit", addDelegationSlot);
+  on(elements.toggleDelegationSlotEditorButton, "click", () => toggleDelegationSlotEditor());
+  on(elements.closeDelegationSlotEditorButton, "click", () => setDelegationSlotEditorVisible(false));
+  on(elements.saveDelegationAssignmentsButton, "click", saveDelegationAssignmentBoard);
+  on(elements.addDelegationForm, "submit", addDelegation);
+  on(elements.delegationSlotSelect, "change", renderDelegationSlotSelectMeta);
+  on(elements.delegationDateInput, "change", () => {
+    if (elements.delegationGraphDateInput && !elements.delegationGraphDateInput.value) {
+      elements.delegationGraphDateInput.value = elements.delegationDateInput.value;
+    }
+    renderDelegations();
+  });
+  on(elements.delegationViewSelect, "change", renderDelegations);
+  on(elements.delegationGraphDateInput, "change", renderDelegations);
+  on(elements.delegationStartInput, "input", updateForwardTimeInputConstraints);
+  on(elements.delegationEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.addSlotForm, "submit", addTimelineSlot);
+  on(elements.slotStartInput, "input", updateForwardTimeInputConstraints);
+  on(elements.slotEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.addSystemForm, "submit", addSystem);
   on(elements.addHolidayForm, "submit", addHoliday);
+  on(elements.addTimezoneForm, "submit", addTimezone);
+  on(elements.shiftStartInput, "input", updateForwardTimeInputConstraints);
+  on(elements.shiftEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.exportButton, "click", exportData);
   on(elements.importInput, "change", importData);
   on(elements.resetButton, "click", resetData);
+  on(elements.contactDevButton, "click", openContactDevModal);
+  on(elements.closeContactDevModalButton, "click", closeContactDevModal);
+  on(elements.copyContactEmailButton, "click", copyContactEmail);
+  on(elements.contactDevModal, "click", (event) => {
+    if (event.target === elements.contactDevModal) {
+      closeContactDevModal();
+    }
+  });
+  on(elements.closeGenericAlertButton, "click", closeGenericAlert);
+  on(elements.genericAlertModal, "click", (event) => {
+    if (event.target === elements.genericAlertModal) {
+      closeGenericAlert();
+    }
+  });
+  on(elements.cancelGenericConfirmButton, "click", closeGenericConfirm);
+  on(elements.confirmGenericConfirmButton, "click", confirmGenericConfirm);
+  on(elements.genericConfirmModal, "click", (event) => {
+    if (event.target === elements.genericConfirmModal) {
+      closeGenericConfirm();
+    }
+  });
   document.addEventListener("keydown", handleGlobalKeydown);
   document.addEventListener("pointerup", finishTimelineDraft);
 }
@@ -401,6 +547,15 @@ function handleGlobalKeydown(event) {
   }
   if (event.key === "Escape" && elements.syncStateModal && !elements.syncStateModal.classList.contains("hidden")) {
     closeSyncStateModal();
+  }
+  if (event.key === "Escape" && elements.genericAlertModal && !elements.genericAlertModal.classList.contains("hidden")) {
+    closeGenericAlert();
+  }
+  if (event.key === "Escape" && elements.genericConfirmModal && !elements.genericConfirmModal.classList.contains("hidden")) {
+    closeGenericConfirm();
+  }
+  if (event.key === "Escape" && elements.contactDevModal && !elements.contactDevModal.classList.contains("hidden")) {
+    closeContactDevModal();
   }
 }
 
@@ -493,11 +648,16 @@ function render() {
   renderAdminTimezoneLabels();
   renderShifts();
   renderShiftAddForm();
+  renderRegions();
   renderUsers();
   renderSystems();
   renderHolidays();
+  renderDelegationSlots();
+  renderDelegations();
   renderTimelineTools();
+  renderTimezoneAdmin();
   renderDataPreview();
+  updateForwardTimeInputConstraints();
   renderDisplayTimezoneSelect();
   renderClockAndAssignment();
   renderAdminLocks();
@@ -522,11 +682,12 @@ function renderClockAndAssignment() {
   }
 
   if (!hasQueueContext) {
-    selectedAssigneeId = null;
+    clearSelectedAssignee();
     renderAssignmentConfirmation(false);
     renderSuggestion({ system: null, rows: [], recommendedRow: null });
     renderQueue({ system: null, rows: [], recommendedRow: null });
     renderDailyRankings(activityNow.date);
+    renderDelegationAssignments(easternNow);
     renderQueueDashboard(easternNow);
     renderAssignmentLog();
     return;
@@ -535,14 +696,43 @@ function renderClockAndAssignment() {
   const queueState = getQueueState(getAssignmentQueueSystemId(), easternNow);
   if (!queueState.rows.some((row) => row.user.id === selectedAssigneeId && row.selectable)) {
     selectedAssigneeId = queueState.recommendedRow?.user.id ?? null;
+    selectedOtherAssigneeId = null;
   }
+  ensureOtherAssigneeSelection(queueState);
 
   renderSuggestion(queueState);
   renderQueue(queueState);
   renderAssignmentConfirmation(true);
   renderDailyRankings(queueState.effectiveNow.date);
+  renderDelegationAssignments(easternNow);
   renderQueueDashboard(easternNow);
   renderAssignmentLog();
+}
+
+function clearSelectedAssignee() {
+  selectedAssigneeId = null;
+  selectedOtherAssigneeId = null;
+}
+
+function ensureOtherAssigneeSelection(queueState) {
+  if (selectedAssigneeId !== OTHER_QUEUE_USER_ID) {
+    selectedOtherAssigneeId = null;
+    return;
+  }
+
+  if (getSelectedOtherRosterRow(queueState)) {
+    return;
+  }
+
+  selectedOtherAssigneeId = getSelectableOtherRows(queueState)[0]?.user.id || null;
+}
+
+function getSelectedOtherRosterRow(queueState) {
+  return queueState.otherRows?.find((row) => row.user.id === selectedOtherAssigneeId && row.selectable) || null;
+}
+
+function getSelectableOtherRows(queueState) {
+  return queueState.otherRows?.filter((row) => row.selectable) || [];
 }
 
 function setAssignmentSectionsVisible(isVisible) {
@@ -559,7 +749,7 @@ function renderDisplayTimezoneSelect(easternNow = getEasternNow()) {
   }
 
   selectedDisplayTimezoneId = getDisplayTimezone(selectedDisplayTimezoneId).id;
-  const timezoneOptions = DISPLAY_TIMEZONES.map((timezone) => (
+  const timezoneOptions = getDisplayTimezones().map((timezone) => (
     `<option value="${escapeHtml(timezone.id)}">${escapeHtml(formatDisplayClock(easternNow, timezone))}</option>`
   ));
   if (elements.debugTimeCard) {
@@ -580,6 +770,7 @@ function changeDisplayTimezone() {
   const scheduleFormTimes = captureScheduleFormTimes(previousTimezone);
   const slotFormTimes = captureSlotFormTimes(previousTimezone);
   const shiftAddFormTimes = captureShiftAddFormTimes(previousTimezone);
+  const delegationFormTimes = captureDelegationFormTimes(previousTimezone);
   selectedDisplayTimezoneId = getDisplayTimezone(elements.displayTimezoneSelect.value).id;
   localStorage.setItem(DISPLAY_TIMEZONE_STORAGE_KEY, selectedDisplayTimezoneId);
   if (elements.debugTimeCard && (devModeUnlocked || debugTimeOverride)) {
@@ -588,6 +779,8 @@ function changeDisplayTimezone() {
   restoreScheduleFormTimes(scheduleFormTimes);
   restoreSlotFormTimes(slotFormTimes);
   restoreShiftAddFormTimes(shiftAddFormTimes);
+  restoreDelegationFormTimes(delegationFormTimes);
+  updateForwardTimeInputConstraints();
   renderTimezoneSensitiveAdminViews();
   renderClockAndAssignment();
 }
@@ -597,10 +790,13 @@ function renderTimezoneSensitiveAdminViews() {
   renderShiftTemplateSelect();
   renderShifts();
   renderTimelineTools();
+  renderDelegationSlots();
+  renderDelegations();
 }
 
 function renderAdminTimezoneLabels() {
   const abbreviation = getSelectedTimezoneAbbreviationForDate(getScheduleReferenceDate());
+  const delegationAbbreviation = getSelectedTimezoneAbbreviationForDate(getDelegationReferenceDate());
   const labelMap = [
     [elements.scheduleDaysLegend, `Schedule days (${abbreviation})`],
     [elements.scheduleStartLabel, `Start ${abbreviation}`],
@@ -608,6 +804,9 @@ function renderAdminTimezoneLabels() {
     [elements.scheduleGraphTitle, `Schedule graph (${abbreviation})`],
     [elements.slotStartLabel, `Start ${abbreviation}`],
     [elements.slotEndLabel, `End ${abbreviation}`],
+    [elements.delegationStartLabel, `Start ${delegationAbbreviation}`],
+    [elements.delegationEndLabel, `End ${delegationAbbreviation}`],
+    [elements.delegationGraphTitle, `Delegation ownership (${delegationAbbreviation})`],
     [elements.shiftStartLabel, `Start ${abbreviation}`],
     [elements.shiftEndLabel, `End ${abbreviation}`]
   ];
@@ -617,6 +816,67 @@ function renderAdminTimezoneLabels() {
       element.textContent = text;
     }
   });
+}
+
+function renderTimezoneAdmin() {
+  if (!elements.timezoneList) {
+    return;
+  }
+
+  const selectedIds = data.displayTimezones.map((tz) => tz.id);
+  const list = data.displayTimezones.map((tz) => `
+    <div class="list-item timezone-list-item">
+      <span class="item-title">${escapeHtml(tz.label || tz.id)}</span>
+      <span class="meta timezone-id">${escapeHtml(tz.timeZone)}</span>
+      <button class="secondary-button" type="button" data-timezone-id="${escapeHtml(tz.id)}" ${selectedIds.length <= 1 ? "disabled" : ""}>Remove</button>
+    </div>
+  `).join("");
+
+  elements.timezoneList.innerHTML = list || "<p class=\"meta\">No timezones configured.</p>";
+
+  elements.timezoneList.querySelectorAll("[data-timezone-id]").forEach((button) => {
+    button.addEventListener("click", () => removeTimezone(button.dataset.timezoneId));
+  });
+
+  if (elements.addTimezoneSelect) {
+    const usedIds = new Set(data.displayTimezones.map((tz) => tz.id));
+    const options = AVAILABLE_TIMEZONES
+      .filter((tz) => !usedIds.has(tz.id))
+      .map((tz) => `<option value="${escapeHtml(tz.id)}">${escapeHtml(tz.label)} (${escapeHtml(tz.timeZone)})</option>`)
+      .join("");
+    elements.addTimezoneSelect.innerHTML = options || "<option value=\"\" disabled>All timezones added</option>";
+  }
+}
+
+function addTimezone(event) {
+  event.preventDefault();
+  if (!isAdminTabUnlocked("timezones")) {
+    return;
+  }
+
+  if (!elements.addTimezoneSelect || !elements.addTimezoneSelect.value) {
+    return;
+  }
+
+  const selected = AVAILABLE_TIMEZONES.find((tz) => tz.id === elements.addTimezoneSelect.value);
+  if (!selected) {
+    return;
+  }
+
+  data.displayTimezones.push({ id: selected.id, timeZone: selected.timeZone, label: selected.label });
+  completeAdminSave("Timezone saved.");
+}
+
+function removeTimezone(timezoneId) {
+  if (!isAdminTabUnlocked("timezones")) {
+    return;
+  }
+
+  if (data.displayTimezones.length <= 1) {
+    return;
+  }
+  data.displayTimezones = data.displayTimezones.filter((tz) => tz.id !== timezoneId);
+  completeAdminSave("Timezone removed.");
 }
 
 function initializeAdminTimeInputs() {
@@ -642,6 +902,13 @@ function initializeAdminTimeInputs() {
   }
   if (elements.shiftEndInput) {
     elements.shiftEndInput.value = formatEasternTimeInputForDisplay(date, elements.shiftEndInput.value || "17:00");
+  }
+  const delegationDate = getDelegationReferenceDate();
+  if (elements.delegationStartInput) {
+    elements.delegationStartInput.value = formatEasternTimeInputForDisplay(delegationDate, elements.delegationStartInput.value || "09:00");
+  }
+  if (elements.delegationEndInput) {
+    elements.delegationEndInput.value = formatEasternTimeInputForDisplay(delegationDate, elements.delegationEndInput.value || "09:30");
   }
 
   adminTimeInputsInitialized = true;
@@ -725,6 +992,32 @@ function restoreShiftAddFormTimes(times) {
   }
 }
 
+function captureDelegationFormTimes(timezone) {
+  if (!elements.delegationStartInput || !elements.delegationEndInput) {
+    return null;
+  }
+
+  const date = getDelegationReferenceDate();
+  return {
+    start: convertDisplayDateTimeToEastern(date, elements.delegationStartInput.value, timezone).time,
+    end: convertDisplayDateTimeToEastern(date, elements.delegationEndInput.value, timezone).time
+  };
+}
+
+function restoreDelegationFormTimes(times) {
+  if (!times) {
+    return;
+  }
+
+  const date = getDelegationReferenceDate();
+  if (elements.delegationStartInput) {
+    elements.delegationStartInput.value = formatEasternTimeInputForDisplay(date, times.start);
+  }
+  if (elements.delegationEndInput) {
+    elements.delegationEndInput.value = formatEasternTimeInputForDisplay(date, times.end);
+  }
+}
+
 function maybePromptForDevMode() {
   if (!elements.debugTimeCard || devModeUnlocked) {
     return;
@@ -805,20 +1098,20 @@ function applyDebugTimeOverride() {
   const date = elements.debugDateInput.value;
   const time = elements.debugTimeInput.value;
   if (!isValidDateInput(date) || !isValidTimeInput(time)) {
-    window.alert("Pick a valid test date and ET time.");
+    showGenericAlert("Invalid time", "Pick a valid test date and ET time.");
     return;
   }
 
   debugTimeOverride = { date, time };
   devModeUnlocked = true;
   saveDebugTimeOverride();
-  selectedAssigneeId = null;
+  clearSelectedAssignee();
   refreshAfterEffectiveTimeChange();
 }
 
 function resetDebugTimeOverride() {
   clearDevModeState();
-  selectedAssigneeId = null;
+  clearSelectedAssignee();
   const liveNow = getLiveEasternNow();
   if (elements.debugDateInput) {
     elements.debugDateInput.value = liveNow.date;
@@ -873,15 +1166,23 @@ function renderUserSelectors() {
   fillUserSelect(elements.scheduleUserSelect);
   fillUserSelect(elements.timelineUserSelect);
   fillUserSelect(elements.holidayUserSelect, true);
+  fillUserSelect(elements.delegationUserSelect, false, "Unassigned");
 }
 
-function fillUserSelect(select, includeAllUsers = false) {
+function fillUserSelect(select, includeAllUsers = false, placeholderLabel = "") {
   if (!select) {
     return;
   }
 
   const selectedValue = select.value;
   select.innerHTML = "";
+
+  if (placeholderLabel) {
+    const placeholderOption = document.createElement("option");
+    placeholderOption.value = "";
+    placeholderOption.textContent = placeholderLabel;
+    select.append(placeholderOption);
+  }
 
   if (includeAllUsers) {
     const allOption = document.createElement("option");
@@ -894,6 +1195,33 @@ function fillUserSelect(select, includeAllUsers = false) {
     const option = document.createElement("option");
     option.value = user.id;
     option.textContent = user.name;
+    select.append(option);
+  });
+
+  if ([...select.options].some((option) => option.value === selectedValue)) {
+    select.value = selectedValue;
+  }
+}
+
+function fillCoverageSelect(select, includeAllCoverage = false) {
+  if (!select) {
+    return;
+  }
+
+  const selectedValue = select.value;
+  select.innerHTML = "";
+
+  if (includeAllCoverage) {
+    const allOption = document.createElement("option");
+    allOption.value = "";
+    allOption.textContent = "All coverage";
+    select.append(allOption);
+  }
+
+  data.systems.forEach((system) => {
+    const option = document.createElement("option");
+    option.value = system.id;
+    option.textContent = system.name;
     select.append(option);
   });
 
@@ -936,30 +1264,43 @@ function renderShifts() {
 
   const date = getScheduleReferenceDate();
   const abbreviation = getSelectedTimezoneAbbreviationForDate(date);
-  const rows = data.shiftTemplates.map((template) => `
-    <div class="shift-row" data-shift-id="${escapeHtml(template.id)}">
-      <div class="shift-row-fields">
-        <label class="field shift-name-control">
-          <span>Name</span>
-          <input class="shift-name-field" type="text" value="${escapeHtml(template.name)}">
-        </label>
-        <label class="field shift-time-control">
-          <span>Start ${escapeHtml(abbreviation)}</span>
-          <input class="shift-start-field" type="time" value="${escapeHtml(formatEasternTimeInputForDisplay(date, template.start))}">
-        </label>
-        <label class="field shift-time-control">
-          <span>End ${escapeHtml(abbreviation)}</span>
-          <input class="shift-end-field" type="time" value="${escapeHtml(formatEasternTimeInputForDisplay(date, template.end))}">
-        </label>
+  const rows = data.shiftTemplates.map((template) => {
+    const displayStart = formatEasternTimeInputForDisplay(date, template.start);
+    const displayEnd = formatEasternTimeInputForDisplay(date, template.end);
+    return `
+      <div class="shift-row" data-shift-id="${escapeHtml(template.id)}">
+        <div class="shift-row-fields">
+          <label class="field shift-name-control">
+            <span>Name</span>
+            <input class="shift-name-field" type="text" value="${escapeHtml(template.name)}">
+          </label>
+          <label class="field shift-time-control">
+            <span>Start ${escapeHtml(abbreviation)}</span>
+            <input class="shift-start-field" type="time" value="${escapeHtml(displayStart)}">
+          </label>
+          <label class="field shift-time-control">
+            <span>End ${escapeHtml(abbreviation)}</span>
+            <input class="shift-end-field" type="time" value="${escapeHtml(displayEnd)}" min="${escapeHtml(displayStart)}">
+          </label>
+        </div>
+        <div class="item-actions shift-row-actions">
+          <button class="small-button" type="button" data-action="update-shift" data-shift-id="${escapeHtml(template.id)}">Update</button>
+          <button class="remove-button" type="button" data-action="remove-shift" data-shift-id="${escapeHtml(template.id)}">Remove</button>
+        </div>
       </div>
-      <div class="item-actions shift-row-actions">
-        <button class="small-button" type="button" data-action="update-shift" data-shift-id="${escapeHtml(template.id)}">Update</button>
-        <button class="remove-button" type="button" data-action="remove-shift" data-shift-id="${escapeHtml(template.id)}">Remove</button>
-      </div>
-    </div>
-  `).join("");
+    `;
+  }).join("");
 
   elements.shiftsList.innerHTML = rows || emptyState("No shifts yet.");
+  elements.shiftsList.querySelectorAll(".shift-start-field").forEach((input) => {
+    input.addEventListener("input", () => {
+      const row = input.closest(".shift-row");
+      const endInput = row?.querySelector(".shift-end-field");
+      if (endInput) {
+        endInput.min = input.value || "";
+      }
+    });
+  });
   elements.shiftsList.querySelectorAll("[data-action='update-shift']").forEach((button) => {
     button.addEventListener("click", () => updateShiftTemplate(button.dataset.shiftId));
   });
@@ -1012,6 +1353,7 @@ function resetShiftAddForm() {
   if (elements.shiftEndInput) {
     elements.shiftEndInput.value = formatEasternTimeInputForDisplay(date, "17:00");
   }
+  updateForwardTimeInputConstraints();
 }
 
 function renderAssignmentRules() {
@@ -1089,6 +1431,11 @@ function renderAdminLocks() {
 
       if (control.matches("[data-lock-exempt]")) {
         control.disabled = false;
+        return;
+      }
+
+      if (control.closest(".region-management-disabled")) {
+        control.disabled = true;
         return;
       }
 
@@ -1238,7 +1585,8 @@ function renderSuggestion(queueState) {
     return;
   }
 
-  elements.markAssignedButton.disabled = !selectedRow.selectable;
+  elements.markAssignedButton.disabled = !selectedRow.selectable
+    || (selectedRow.isOther && !getSelectedOtherRosterRow(queueState));
 }
 
 function renderQueue(queueState) {
@@ -1248,29 +1596,43 @@ function renderQueue(queueState) {
 
   if (!queueState.system) {
     elements.queueList.innerHTML = "";
+    renderOtherAssigneePicker(queueState);
     return;
   }
 
   const rows = queueState.rows.map((row, index) => {
     const selectedClass = row.user.id === selectedAssigneeId ? " selected" : "";
+    const otherClass = row.isOther ? " other" : "";
     const disabled = row.selectable ? "" : "disabled";
-    const metricText = `${row.dailyTickets} today · ${row.consecutiveTickets} in a row`;
-    const fallbackDisclaimer = row.user.id === selectedAssigneeId && !row.isCoverageMember
+    const selectableOtherCount = row.isOther ? getSelectableOtherRows(queueState).length : 0;
+    const metricText = row.isOther
+      ? `${selectableOtherCount} roster option${selectableOtherCount === 1 ? "" : "s"}`
+      : `${row.dailyTickets} today · ${row.consecutiveTickets} in a row`;
+    const regionTags = row.isOther ? "" : renderUserRegionTags(row.user, "queue-region-list");
+    const fallbackDisclaimer = !row.isOther && row.user.id === selectedAssigneeId && !row.isCoverageMember
       ? "<span class=\"queue-disclaimer\">Fallback pick — not an SME for this coverage.</span>"
       : "";
+    const nonSmeInlineLabel = row.isOther ? "<span class=\"queue-inline-note\">Non-SME fallback</span>" : "";
     return `
-      <div class="queue-step queue-rank-${index % 5} ${row.status}${selectedClass}">
+      <div class="queue-step queue-rank-${index % 5} ${row.status}${selectedClass}${otherClass}">
         <div class="queue-stop" aria-hidden="true">
           <span>${index + 1}</span>
         </div>
-        <button class="queue-card ${row.status}${selectedClass}" type="button" data-user-id="${escapeHtml(row.user.id)}" ${disabled}>
+        <button class="queue-card ${row.status}${selectedClass}${otherClass}" type="button" data-user-id="${escapeHtml(row.user.id)}" ${disabled}>
           <span class="queue-card-header">
             <span class="queue-position">${getOrdinalLabel(index + 1)} in queue</span>
             ${renderQueueStatusBadge(row, { showWaitTime: true })}
           </span>
-          <span class="queue-name">${escapeHtml(row.user.name)}</span>
-          <span class="meta">${escapeHtml(getQueueCardMessage(row))}</span>
-          <span class="queue-metrics">${escapeHtml(metricText)}</span>
+          <span class="queue-person-row">
+            <span class="queue-identity">
+              <span class="queue-name">${escapeHtml(row.user.name)}${nonSmeInlineLabel}</span>
+              ${regionTags}
+            </span>
+          </span>
+          <span class="queue-message">${escapeHtml(getQueueCardMessage(row))}</span>
+          <span class="queue-card-footer">
+            <span class="queue-metrics">${escapeHtml(metricText)}</span>
+          </span>
           ${fallbackDisclaimer}
         </button>
       </div>
@@ -1281,9 +1643,39 @@ function renderQueue(queueState) {
   elements.queueList.querySelectorAll(".queue-card").forEach((button) => {
     button.addEventListener("click", () => {
       selectedAssigneeId = button.dataset.userId;
+      if (selectedAssigneeId !== OTHER_QUEUE_USER_ID) {
+        selectedOtherAssigneeId = null;
+      }
       renderClockAndAssignment();
     });
   });
+  renderOtherAssigneePicker(queueState);
+}
+
+function renderOtherAssigneePicker(queueState) {
+  if (!elements.otherAssigneePicker || !elements.otherAssigneeSelect) {
+    return;
+  }
+
+  const shouldShow = selectedAssigneeId === OTHER_QUEUE_USER_ID && Array.isArray(queueState.otherRows);
+  elements.otherAssigneePicker.classList.toggle("hidden", !shouldShow);
+  if (!shouldShow) {
+    elements.otherAssigneeSelect.innerHTML = "";
+    return;
+  }
+
+  const options = queueState.otherRows.map((row) => {
+    const disabled = row.selectable ? "" : "disabled";
+    return `<option value="${escapeHtml(row.user.id)}" ${disabled}>${escapeHtml(row.user.name)} · ${escapeHtml(formatOtherRosterAvailability(row))}</option>`;
+  }).join("");
+  elements.otherAssigneeSelect.innerHTML = options || "<option value=\"\" disabled>No roster users</option>";
+  elements.otherAssigneeSelect.value = selectedOtherAssigneeId || "";
+}
+
+function formatOtherRosterAvailability(row) {
+  return getQueueCardMessage(row)
+    .replace(/\. You can pick them anyway\.$/, "")
+    .replace(/\.$/, "");
 }
 
 function renderQueueDashboard(easternNow) {
@@ -1312,15 +1704,17 @@ function renderQueueDashboard(easternNow) {
   const cards = data.systems.map((system) => {
     const queueState = getQueueState(system.id, easternNow);
     const coverageTicketCount = getDailyCoverageAssignmentCount(system, queueState.effectiveNow.date);
-    const rows = queueState.rows.map((row, index) => {
+    const rows = queueState.rows.filter((row) => !row.isOther).map((row, index) => {
       const nextClass = index === 0 ? " next" : "";
       const metricText = `${row.dailyTickets} today · ${row.consecutiveTickets} in a row`;
+      const regionTags = renderUserRegionTags(row.user, "dashboard-region-list");
       return `
         <li class="dashboard-queue-row ${row.status}${nextClass}">
           <span class="dashboard-queue-number">${index + 1}</span>
           <span class="dashboard-queue-person">
             <strong>${escapeHtml(row.user.name)}</strong>
             <small>${escapeHtml(metricText)}</small>
+            ${regionTags}
           </span>
           ${renderQueueStatusBadge(row, { showWaitTime: true })}
         </li>
@@ -1357,6 +1751,34 @@ function renderQueueStatusBadge(row, options = {}) {
   return row.status === "available"
     ? ""
     : `<span class="status-pill ${row.status}">${escapeHtml(badge)}</span>`;
+}
+
+function renderUserRegionTags(user, className = "region-tag-list") {
+  const regions = getUserRegions(user);
+  if (regions.length === 0) {
+    return "";
+  }
+
+  return `
+    <span class="${className}">
+      ${regions.map((region) => `<span>${escapeHtml(region.name)}</span>`).join("")}
+    </span>
+  `;
+}
+
+function getUserRegions(user) {
+  if (!areRegionsEnabled()) {
+    return [];
+  }
+
+  const regionIds = Array.isArray(user.regionIds) ? user.regionIds : [];
+  return regionIds
+    .map((regionId) => data.regions.find((region) => region.id === regionId))
+    .filter(Boolean);
+}
+
+function areRegionsEnabled() {
+  return data.regionsEnabled !== false;
 }
 
 function getQueueCardMessage(row) {
@@ -1577,7 +1999,7 @@ function saveAmendedAssignment(event) {
   const system = getAssignmentSystemById(getAssignmentEditValue(form, "systemId"));
   const user = data.users.find((item) => item.id === getAssignmentEditValue(form, "userId"));
   if (!system || !user) {
-    window.alert("Choose a valid queue and user.");
+    showGenericAlert("Invalid selection", "Choose a valid queue and user.");
     return;
   }
 
@@ -1597,16 +2019,18 @@ function getAssignmentEditValue(form, fieldName) {
 
 function deleteAssignment(assignmentId) {
   const entry = data.assignmentLog.find((assignment) => assignment.id === assignmentId);
-  if (!entry || !window.confirm("Delete this ticket assignment?")) {
+  if (!entry) {
     return;
   }
 
-  data.assignmentLog = data.assignmentLog.filter((assignment) => assignment.id !== assignmentId);
-  if (lastAssignmentId === assignmentId) {
-    lastAssignmentId = null;
-  }
-  editingAssignmentId = null;
-  completeDataSave("Assignment deleted.", { showToast: true });
+  showGenericConfirm("Delete assignment", "Delete this ticket assignment?", () => {
+    data.assignmentLog = data.assignmentLog.filter((assignment) => assignment.id !== assignmentId);
+    if (lastAssignmentId === assignmentId) {
+      lastAssignmentId = null;
+    }
+    editingAssignmentId = null;
+    completeDataSave("Assignment deleted.", { showToast: true });
+  });
 }
 
 function toggleQueueDashboard() {
@@ -1620,7 +2044,7 @@ function openDashboardSystem(systemId) {
   }
 
   elements.assignmentSystemSelect.value = systemId;
-  selectedAssigneeId = null;
+  clearSelectedAssignee();
   lastAssignmentId = null;
   renderClockAndAssignment();
   elements.queueSection?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1634,11 +2058,13 @@ function renderUsers() {
   const rows = data.users.map((user, index) => {
     const moveUpDisabled = index === 0 ? "disabled" : "";
     const moveDownDisabled = index === data.users.length - 1 ? "disabled" : "";
+    const regionEditor = renderUserRegionEditor(user);
     return `
       <div class="list-item team-member-row">
         <div class="team-rank">#${index + 1}</div>
         <div class="team-member-main">
           <div class="item-title">${escapeHtml(user.name)}</div>
+          ${regionEditor}
         </div>
         <div class="item-actions team-member-actions">
           <button class="small-button hierarchy-button" type="button" data-action="move-team-user" data-user-id="${escapeHtml(user.id)}" data-direction="-1" aria-label="Move ${escapeHtml(user.name)} up" ${moveUpDisabled}>↑</button>
@@ -1655,6 +2081,76 @@ function renderUsers() {
   });
   elements.usersList.querySelectorAll("[data-action='remove-user']").forEach((button) => {
     button.addEventListener("click", () => removeUser(button.dataset.userId));
+  });
+  elements.usersList.querySelectorAll("[data-action='toggle-user-region']").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => toggleUserRegion(checkbox.dataset.userId, checkbox.dataset.regionId, checkbox.checked));
+  });
+}
+
+function renderUserRegionEditor(user) {
+  if (!areRegionsEnabled()) {
+    return "";
+  }
+
+  if (data.regions.length === 0) {
+    return "<div class=\"team-region-empty meta\">No regions defined.</div>";
+  }
+
+  const assignedRegions = new Set(user.regionIds || []);
+  const chips = data.regions.map((region) => `
+    <label class="region-chip">
+      <input type="checkbox" data-action="toggle-user-region" data-user-id="${escapeHtml(user.id)}" data-region-id="${escapeHtml(region.id)}" ${assignedRegions.has(region.id) ? "checked" : ""}>
+      <span>${escapeHtml(region.name)}</span>
+    </label>
+  `).join("");
+
+  return `<div class="team-region-editor">${chips}</div>`;
+}
+
+function renderRegions() {
+  if (!elements.regionsList) {
+    return;
+  }
+
+  const regionsEnabled = areRegionsEnabled();
+  if (elements.regionsEnabledInput) {
+    elements.regionsEnabledInput.checked = regionsEnabled;
+  }
+  if (elements.regionsEnabledLabel) {
+    elements.regionsEnabledLabel.textContent = regionsEnabled ? "Yes" : "No";
+  }
+  setRegionManagementEnabled(regionsEnabled);
+
+  const rows = data.regions.map((region) => {
+    const assignedCount = data.users.filter((user) => user.regionIds?.includes(region.id)).length;
+    return `
+      <div class="list-item region-row">
+        <div>
+          <div class="item-title">${escapeHtml(region.name)}</div>
+          <div class="meta">${assignedCount} user${assignedCount === 1 ? "" : "s"}</div>
+        </div>
+        <div class="item-actions">
+          <button class="remove-button" type="button" data-action="remove-region" data-region-id="${escapeHtml(region.id)}">Remove</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  elements.regionsList.innerHTML = rows || emptyState("No regions defined yet.");
+  elements.regionsList.querySelectorAll("[data-action='remove-region']").forEach((button) => {
+    button.addEventListener("click", () => removeRegion(button.dataset.regionId));
+  });
+}
+
+function setRegionManagementEnabled(isEnabled) {
+  elements.addRegionForm?.classList.toggle("region-management-disabled", !isEnabled);
+  elements.regionsList?.classList.toggle("region-management-disabled", !isEnabled);
+
+  elements.addRegionForm?.querySelectorAll("input, select, textarea, button").forEach((control) => {
+    control.disabled = !isEnabled;
+  });
+  elements.regionsList?.querySelectorAll("input, select, textarea, button").forEach((control) => {
+    control.disabled = !isEnabled;
   });
 }
 
@@ -1939,6 +2435,7 @@ function renderSystems() {
           <div class="item-actions">
             <button class="small-button priority-move-button" type="button" data-action="move-user" data-system-id="${escapeHtml(system.id)}" data-user-id="${escapeHtml(user.id)}" data-direction="-1" aria-label="Move ${escapeHtml(user.name)} up">↑</button>
             <button class="small-button priority-move-button" type="button" data-action="move-user" data-system-id="${escapeHtml(system.id)}" data-user-id="${escapeHtml(user.id)}" data-direction="1" aria-label="Move ${escapeHtml(user.name)} down">↓</button>
+            <button class="remove-button priority-remove-button" type="button" data-action="remove-covered-user" data-system-id="${escapeHtml(system.id)}" data-user-id="${escapeHtml(user.id)}" aria-label="Remove ${escapeHtml(user.name)} from ${escapeHtml(system.name)}">Delete</button>
           </div>
         </div>
       `;
@@ -1978,6 +2475,9 @@ function renderSystems() {
   elements.systemsList.querySelectorAll("[data-action='move-user']").forEach((button) => {
     button.addEventListener("click", () => moveCoveredUser(button.dataset.systemId, button.dataset.userId, Number(button.dataset.direction)));
   });
+  elements.systemsList.querySelectorAll("[data-action='remove-covered-user']").forEach((button) => {
+    button.addEventListener("click", () => removeCoveredUser(button.dataset.systemId, button.dataset.userId));
+  });
   elements.systemsList.querySelectorAll("[data-action='remove-system']").forEach((button) => {
     button.addEventListener("click", () => removeSystem(button.dataset.systemId));
   });
@@ -2010,6 +2510,238 @@ function renderHolidays() {
   });
 }
 
+function renderDelegationSlots() {
+  renderDelegationSlotSelect();
+
+  if (!elements.delegationSlotsList) {
+    return;
+  }
+
+  const rows = getSortedDelegationSlots().map((slot) => `
+    <div class="list-item">
+      <div>
+        <div class="item-title">${escapeHtml(formatDelegationSlotDefinition(slot))}</div>
+      </div>
+      <button class="remove-button" type="button" data-action="remove-delegation-slot" data-slot-id="${escapeHtml(slot.id)}">Delete</button>
+    </div>
+  `).join("");
+
+  elements.delegationSlotsList.innerHTML = rows || emptyState("No predefined coverage slots yet.");
+  elements.delegationSlotsList.querySelectorAll("[data-action='remove-delegation-slot']").forEach((button) => {
+    button.addEventListener("click", () => removeDelegationSlot(button.dataset.slotId));
+  });
+}
+
+function renderDelegationSlotSelect() {
+  if (!elements.delegationSlotSelect) {
+    return;
+  }
+
+  const selectedValue = elements.delegationSlotSelect.value;
+  const slots = getSortedDelegationSlots();
+  elements.delegationSlotSelect.innerHTML = slots.length > 0
+    ? slots.map((slot) => `<option value="${escapeHtml(slot.id)}">${escapeHtml(formatDelegationSlotDefinition(slot))}</option>`).join("")
+    : "<option value=\"\" disabled selected>Create a coverage slot first</option>";
+
+  if (slots.some((slot) => slot.id === selectedValue)) {
+    elements.delegationSlotSelect.value = selectedValue;
+  } else if (slots[0]) {
+    elements.delegationSlotSelect.value = slots[0].id;
+  }
+
+  renderDelegationSlotSelectMeta();
+}
+
+function renderDelegationSlotSelectMeta() {
+  if (!elements.delegationSlotMeta) {
+    return;
+  }
+
+  const slot = getSelectedDelegationSlot();
+  elements.delegationSlotMeta.textContent = slot
+    ? formatDelegationSlotDefinition(slot)
+    : "Create predefined coverage slots before assigning delegators.";
+}
+
+function toggleDelegationSlotEditor() {
+  setDelegationSlotEditorVisible(elements.delegationSlotEditor?.classList.contains("hidden"));
+}
+
+function setDelegationSlotEditorVisible(isVisible) {
+  if (!elements.delegationSlotEditor) {
+    return;
+  }
+
+  elements.delegationSlotEditor.classList.toggle("hidden", !isVisible);
+  elements.toggleDelegationSlotEditorButton?.setAttribute("aria-expanded", String(isVisible));
+  if (elements.toggleDelegationSlotEditorButton) {
+    elements.toggleDelegationSlotEditorButton.textContent = isVisible ? "Close time slots" : "Edit time slots";
+  }
+  if (isVisible) {
+    elements.delegationStartInput?.focus();
+  }
+}
+
+function renderDelegations() {
+  renderDelegationGraph();
+}
+
+function renderDelegationGraph() {
+  if (!elements.delegationCanvas || !elements.delegationGraphDateInput) {
+    return;
+  }
+
+  updateDelegationGraphDateCopy();
+  const date = elements.delegationGraphDateInput.value || getEasternNow().date;
+  const view = elements.delegationViewSelect?.value || "day";
+
+  renderDelegationAssignmentBoard(date, view);
+}
+
+function updateDelegationGraphDateCopy() {
+  if (!elements.delegationGraphDateLabel) {
+    return;
+  }
+
+  const isWeekView = elements.delegationViewSelect?.value === "week";
+  elements.delegationGraphDateLabel.textContent = isWeekView ? "Week containing date" : "Delegation date";
+}
+
+function renderDelegationAssignmentBoard(date, view) {
+  const container = getDelegationAssignmentContainer();
+  if (!container) {
+    return;
+  }
+
+  const slots = getSortedDelegationSlots();
+  const dates = view === "week" ? getDelegationWeekDates(date) : [date];
+  container.className = `delegation-assignment-board ${view === "week" ? "week-board" : "day-board"}`;
+
+  if (slots.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        No time slots yet. Click “Edit time slots” to create the coverage times once.
+      </div>
+    `;
+    if (elements.saveDelegationAssignmentsButton) {
+      elements.saveDelegationAssignmentsButton.disabled = true;
+    }
+    return;
+  }
+
+  if (elements.saveDelegationAssignmentsButton) {
+    elements.saveDelegationAssignmentsButton.disabled = false;
+  }
+
+  container.innerHTML = view === "week"
+    ? renderWeeklyDelegationAssignmentBoard(slots, dates)
+    : renderDailyDelegationAssignmentBoard(slots, dates[0]);
+}
+
+function getDelegationAssignmentContainer() {
+  return elements.delegationAssignmentBoard || elements.delegationCanvas;
+}
+
+function getDelegationWeekDates(date) {
+  return getWeekDates(date).slice(0, 5);
+}
+
+function renderDailyDelegationAssignmentBoard(slots, date) {
+  const rows = slots.map((slot) => {
+    const delegation = getDelegationForSlotDate(slot, date);
+    return `
+      <div class="delegation-board-row">
+        <div class="delegation-slot-label">
+          <strong>${escapeHtml(formatDelegationSlotDefinition(slot))}</strong>
+        </div>
+        ${renderDelegationOwnerSelect(slot, date, delegation)}
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="delegation-board-day">
+      ${rows}
+    </div>
+  `;
+}
+
+function renderWeeklyDelegationAssignmentBoard(slots, dates) {
+  const header = dates.map((date) => `
+    <div class="delegation-board-heading">
+      <strong>${getDayNameFromDate(date).slice(0, 3)}</strong>
+      <span>${date.slice(5)}</span>
+    </div>
+  `).join("");
+
+  const rows = slots.map((slot) => {
+    const cells = dates.map((date) => renderDelegationOwnerSelect(slot, date, getDelegationForSlotDate(slot, date))).join("");
+    return `
+      <div class="delegation-board-row delegation-board-week-row">
+        <div class="delegation-slot-label">
+          <strong>${escapeHtml(formatDelegationSlotDefinition(slot))}</strong>
+        </div>
+        ${cells}
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="delegation-board-row delegation-board-week-row delegation-board-header">
+      <div class="delegation-slot-label">Slot</div>
+      ${header}
+    </div>
+    ${rows}
+  `;
+}
+
+function renderDelegationOwnerSelect(slot, date, delegation) {
+  const selectedUserId = delegation?.delegatorUserId || "";
+  const label = `${formatDelegationSlotDefinition(slot)} on ${formatDisplayDate(date)}`;
+  const options = [
+    `<option value="">Unassigned</option>`,
+    ...data.users.map((user) => (
+      `<option value="${escapeHtml(user.id)}" ${user.id === selectedUserId ? "selected" : ""}>${escapeHtml(user.name)}</option>`
+    ))
+  ].join("");
+
+  return `
+    <label class="delegation-owner-field">
+      <select class="delegation-owner-select" data-slot-id="${escapeHtml(slot.id)}" data-date="${escapeHtml(date)}" aria-label="Delegator for ${escapeHtml(label)}">
+        ${options}
+      </select>
+    </label>
+  `;
+}
+
+function renderDelegationAssignments(easternNow = getEasternNow()) {
+  if (!elements.delegationAssignmentsList) {
+    return;
+  }
+
+  const currentDelegations = getCurrentDelegations(easternNow);
+  const rows = currentDelegations.map((delegation) => `
+    <div class="delegation-card ${getDelegationStatus(delegation, easternNow).status}${delegation.delegatorUserId ? "" : " unassigned"}">
+      <div>
+        <div class="item-title">${escapeHtml(formatCurrentDelegationLine(delegation))}</div>
+      </div>
+    </div>
+  `).join("");
+
+  elements.delegationAssignmentsList.innerHTML = rows || `
+    <div class="delegation-card unassigned">
+      <div>
+        <div class="item-title">Unassigned</div>
+      </div>
+    </div>
+  `;
+}
+
+function formatCurrentDelegationLine(delegation) {
+  const abbreviation = getSelectedTimezoneAbbreviationForDelegation(delegation);
+  return `${getDelegationUserName(delegation)} · ${formatDelegationRecordDisplayTimeRange(delegation)} ${abbreviation}`;
+}
+
 function renderDataPreview() {
   if (!elements.dataPreview) {
     return;
@@ -2040,20 +2772,24 @@ function addShiftTemplate(event) {
   const displayStart = elements.shiftStartInput.value;
   const displayEnd = elements.shiftEndInput.value;
 
-  if (!name || !isValidTimeRange(displayStart, displayEnd)) {
-    window.alert("Add a shift name and valid start/end times.");
+  if (!name || !isForwardTimeRange(displayStart, displayEnd)) {
+    showGenericAlert("Invalid shift", "Add a shift name and make the start time earlier than the end time.");
     return;
   }
 
   const date = getScheduleReferenceDate();
-  const start = convertDisplayDateTimeToEastern(date, displayStart).time;
-  const end = convertDisplayDateTimeToEastern(date, displayEnd).time;
+  const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
+  const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
+  if (!isSameDayForwardEasternRange(convertedStart, convertedEnd)) {
+    showGenericAlert("Invalid shift", "Shift times must stay older-to-newer on the same Eastern day.");
+    return;
+  }
 
   data.shiftTemplates.push({
     id: makeId(name, data.shiftTemplates.map((template) => template.id)),
     name,
-    start,
-    end
+    start: convertedStart.time,
+    end: convertedEnd.time
   });
 
   shiftAddFormOpen = false;
@@ -2076,16 +2812,23 @@ function updateShiftTemplate(shiftId) {
   const displayStart = row.querySelector(".shift-start-field").value;
   const displayEnd = row.querySelector(".shift-end-field").value;
 
-  if (!name || !isValidTimeRange(displayStart, displayEnd)) {
-    window.alert("Shifts need a name and valid start/end times.");
+  if (!name || !isForwardTimeRange(displayStart, displayEnd)) {
+    showGenericAlert("Invalid shift", "Shifts need a name and a start time earlier than the end time.");
     return;
   }
 
   const date = getScheduleReferenceDate();
+  const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
+  const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
+  if (!isSameDayForwardEasternRange(convertedStart, convertedEnd)) {
+    showGenericAlert("Invalid shift", "Shift times must stay older-to-newer on the same Eastern day.");
+    return;
+  }
+
   template.name = name;
-  template.start = convertDisplayDateTimeToEastern(date, displayStart).time;
-  template.end = convertDisplayDateTimeToEastern(date, displayEnd).time;
-  completeAdminSave("Shift saved.", "shifts");
+  template.start = convertedStart.time;
+  template.end = convertedEnd.time;
+  completeAdminSave("Shift saved.");
 }
 
 function removeShiftTemplate(shiftId) {
@@ -2152,7 +2895,7 @@ function performRemoveShiftTemplate(shiftId) {
       }
     });
   });
-  completeAdminSave("Shift removed.", "shifts");
+  completeAdminSave("Shift removed.");
 }
 
 function getRemoveShiftImpactText(template) {
@@ -2179,11 +2922,85 @@ function addUser(event) {
   data.users.push({
     id: makeId(name, data.users.map((user) => user.id)),
     name,
+    regionIds: [],
     schedules: []
   });
 
   elements.addUserForm.reset();
-  completeAdminSave("User saved.", "users");
+  completeAdminSave("User saved.");
+}
+
+function addRegion(event) {
+  event.preventDefault();
+  if (!isAdminTabUnlocked("regions")) {
+    return;
+  }
+
+  const name = elements.regionNameInput.value.trim();
+  if (!name) {
+    return;
+  }
+
+  data.regions.push({
+    id: makeId(name, data.regions.map((region) => region.id)),
+    name
+  });
+
+  elements.addRegionForm.reset();
+  completeAdminSave("Region saved.");
+}
+
+function toggleRegionsEnabled() {
+  if (!isAdminTabUnlocked("regions")) {
+    if (elements.regionsEnabledInput) {
+      elements.regionsEnabledInput.checked = areRegionsEnabled();
+    }
+    return;
+  }
+
+  data.regionsEnabled = Boolean(elements.regionsEnabledInput?.checked);
+  completeAdminSave(data.regionsEnabled ? "Regions enabled." : "Regions disabled.");
+}
+
+function removeRegion(regionId) {
+  if (!isAdminTabUnlocked("regions")) {
+    return;
+  }
+
+  const region = data.regions.find((item) => item.id === regionId);
+  if (!region) {
+    return;
+  }
+
+  showGenericConfirm("Remove region", `Remove ${region.name}?`, () => {
+    data.regions = data.regions.filter((item) => item.id !== regionId);
+    data.users.forEach((user) => {
+      user.regionIds = (user.regionIds || []).filter((id) => id !== regionId);
+    });
+    completeAdminSave("Region removed.");
+  });
+}
+
+function toggleUserRegion(userId, regionId, checked) {
+  if (!isAdminTabUnlocked("users")) {
+    return;
+  }
+
+  const user = data.users.find((item) => item.id === userId);
+  const region = data.regions.find((item) => item.id === regionId);
+  if (!user || !region || !areRegionsEnabled()) {
+    return;
+  }
+
+  user.regionIds = Array.isArray(user.regionIds) ? user.regionIds : [];
+  if (checked && !user.regionIds.includes(regionId)) {
+    user.regionIds.push(regionId);
+  }
+  if (!checked) {
+    user.regionIds = user.regionIds.filter((id) => id !== regionId);
+  }
+
+  completeAdminSave("User regions saved.");
 }
 
 function removeUser(userId) {
@@ -2248,12 +3065,17 @@ function performRemoveUser(userId) {
   data.users = data.users.filter((item) => item.id !== userId);
   data.exceptions = data.exceptions.filter((slot) => slot.userId !== userId);
   data.holidays = data.holidays.filter((holiday) => holiday.userId !== userId);
+  data.delegations.forEach((delegation) => {
+    if (delegation.delegatorUserId === userId) {
+      delegation.delegatorUserId = "";
+    }
+  });
   data.systems.forEach((system) => {
     system.primaryUserIds = system.primaryUserIds.filter((id) => id !== userId);
     clampQueue(system.id);
   });
-  selectedAssigneeId = null;
-  completeAdminSave("User removed.", "users");
+  clearSelectedAssignee();
+  completeAdminSave("User removed.");
 }
 
 function getRemoveUserImpactText(user) {
@@ -2284,7 +3106,7 @@ function moveTeamUser(userId, direction) {
 
   const [user] = data.users.splice(currentIndex, 1);
   data.users.splice(nextIndex, 0, user);
-  completeAdminSave("Team hierarchy updated.", "users");
+  completeAdminSave("Team hierarchy updated.");
 }
 
 function applyShiftTemplate() {
@@ -2296,6 +3118,7 @@ function applyShiftTemplate() {
   const date = getScheduleReferenceDate();
   elements.scheduleStartInput.value = formatEasternTimeInputForDisplay(date, template.start);
   elements.scheduleEndInput.value = formatEasternTimeInputForDisplay(date, template.end);
+  updateForwardTimeInputConstraints();
 }
 
 function renderScheduleFormMode() {
@@ -2319,26 +3142,33 @@ function addSchedule(event) {
   event.preventDefault();
   const user = data.users.find((item) => item.id === elements.scheduleUserSelect.value);
   if (!user) {
-    window.alert("Add a user before adding a schedule.");
+    showGenericAlert("Missing user", "Add a user before adding a schedule.");
     return;
   }
 
   const days = [...elements.dayCheckboxes.querySelectorAll("input:checked")].map((input) => input.value);
   if (days.length === 0) {
-    window.alert("Choose at least one day.");
+    showGenericAlert("Missing days", "Choose at least one day.");
     return;
   }
 
   const displayStart = elements.scheduleStartInput.value;
   const displayEnd = elements.scheduleEndInput.value;
-  if (!isValidTimeRange(displayStart, displayEnd)) {
-    window.alert("Schedule start and end cannot be the same.");
+  if (!isForwardTimeRange(displayStart, displayEnd)) {
+    showGenericAlert("Invalid time", "Schedule start time must be earlier than end time.");
     return;
   }
 
   const date = getScheduleReferenceDate();
-  const start = convertDisplayDateTimeToEastern(date, displayStart).time;
-  const end = convertDisplayDateTimeToEastern(date, displayEnd).time;
+  const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
+  const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
+  if (!isSameDayForwardEasternRange(convertedStart, convertedEnd)) {
+    showGenericAlert("Invalid time", "Schedule times must stay older-to-newer on the same Eastern day.");
+    return;
+  }
+
+  const start = convertedStart.time;
+  const end = convertedEnd.time;
   const dateRange = getScheduleDateRangeFromForm();
   if (!dateRange) {
     return;
@@ -2351,7 +3181,7 @@ function addSchedule(event) {
 
   const conflictDays = getScheduleDayConflicts(user, days, dateRange);
   if (conflictDays.length > 0) {
-    window.alert(formatScheduleConflictMessage(user, conflictDays));
+    showGenericAlert("Schedule conflict", formatScheduleConflictMessage(user, conflictDays));
     return;
   }
 
@@ -2374,14 +3204,14 @@ function updateSchedule(user, days, start, end, dateRange) {
   if (!schedule) {
     editingSchedule = null;
     renderScheduleFormMode();
-    window.alert("This schedule no longer exists.");
+    showGenericAlert("Schedule gone", "This schedule no longer exists.");
     return;
   }
 
   const ignoredScheduleId = user.id === originalUser.id ? schedule.id : null;
   const conflictDays = getScheduleDayConflicts(user, days, dateRange, ignoredScheduleId);
   if (conflictDays.length > 0) {
-    window.alert(formatScheduleConflictMessage(user, conflictDays));
+    showGenericAlert("Schedule conflict", formatScheduleConflictMessage(user, conflictDays));
     return;
   }
 
@@ -2411,7 +3241,12 @@ function getScheduleDateRangeFromForm() {
   const startDate = elements.scheduleStartDateInput?.value || "";
   const endDate = elements.scheduleEndDateInput?.value || "";
   if (!isValidDateInput(startDate) || !isValidDateInput(endDate)) {
-    window.alert("Choose valid schedule dates.");
+    showGenericAlert("Invalid dates", "Choose valid schedule dates.");
+    return null;
+  }
+
+  if (!isForwardDateRange(startDate, endDate)) {
+    showGenericAlert("Invalid dates", "Schedule dates must go from older to newer.");
     return null;
   }
 
@@ -2571,30 +3406,35 @@ function addTimelineSlot(event) {
   event.preventDefault();
   const user = data.users.find((item) => item.id === elements.timelineUserSelect.value);
   if (!user) {
-    window.alert("Add a user before adding a timeline slot.");
+    showGenericAlert("Missing user", "Add a user before adding a timeline slot.");
     return;
   }
 
   const displayStart = elements.slotStartInput.value;
   const displayEnd = elements.slotEndInput.value;
-  if (!isValidTimeRange(displayStart, displayEnd)) {
-    window.alert("Slot start and end cannot be the same.");
+  if (!isForwardTimeRange(displayStart, displayEnd)) {
+    showGenericAlert("Invalid time", "Slot start time must be earlier than end time.");
     return;
   }
 
   if (!elements.slotDateInput.value) {
-    window.alert("Choose a break or extra slot date.");
+    showGenericAlert("Missing date", "Choose a break or extra slot date.");
     return;
   }
 
   const reason = elements.slotReasonInput.value.trim();
   if (!reason) {
-    window.alert("Add a comment.");
+    showGenericAlert("Missing comment", "Add a comment.");
     return;
   }
 
   const start = convertDisplayDateTimeToEastern(elements.slotDateInput.value, displayStart);
   const end = convertDisplayDateTimeToEastern(elements.slotDateInput.value, displayEnd);
+  if (!isSameDayForwardEasternRange(start, end)) {
+    showGenericAlert("Invalid time", "Slot times must stay older-to-newer on the same Eastern day.");
+    return;
+  }
+
   data.exceptions.push({
     id: makeRecordId("slot"),
     userId: user.id,
@@ -2814,7 +3654,7 @@ function saveTimelineDraftSchedule() {
   const conflict = getTimelineDraftScheduleConflict();
 
   if (conflict) {
-    window.alert(formatScheduleConflictMessage(conflict.user, conflict.conflictDays));
+    showGenericAlert("Schedule conflict", formatScheduleConflictMessage(conflict.user, conflict.conflictDays));
     return;
   }
 
@@ -3028,6 +3868,350 @@ function selectScheduleDays(days) {
   });
 }
 
+function addDelegationSlot(event) {
+  event.preventDefault();
+
+  const displayStart = elements.delegationStartInput.value;
+  const displayEnd = elements.delegationEndInput.value;
+  if (!isForwardTimeRange(displayStart, displayEnd)) {
+    showGenericAlert("Invalid time", "Coverage slot times must stay older-to-newer on the same local day.");
+    return;
+  }
+
+  if (!isSlotAlignedTimeRange(displayStart, displayEnd)) {
+    showGenericAlert("Invalid time", `Coverage slots use ${SLOT_MINUTES}-minute increments.`);
+    return;
+  }
+
+  const date = getDelegationReferenceDate();
+  const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
+  const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
+  if (!isSameDayForwardEasternRange(convertedStart, convertedEnd)) {
+    showGenericAlert("Invalid time", "Coverage slot times must stay older-to-newer on the same Eastern day.");
+    return;
+  }
+
+  const start = convertedStart.time;
+  const end = convertedEnd.time;
+  const slotLabel = formatDelegationSlotTimeRange({ start, end });
+  const slot = {
+    id: makeId(`delegation-${start}-${end}`, (data.delegationSlots || []).map((item) => item.id)),
+    name: slotLabel,
+    start,
+    end
+  };
+  const overlap = getDelegationSlotDefinitionOverlap(slot);
+  if (overlap) {
+    showGenericAlert("Slot overlap", `This coverage slot overlaps ${formatDelegationSlotDefinition(overlap)}.`);
+    return;
+  }
+
+  data.delegationSlots.push(slot);
+  advanceDelegationFormAfterSave(displayEnd);
+  completeAdminSave("Coverage slot saved.");
+}
+
+function saveDelegationAssignmentBoard() {
+  const selects = Array.from(getDelegationAssignmentContainer()?.querySelectorAll(".delegation-owner-select") || []);
+  if (selects.length === 0) {
+    showGenericAlert("No slots", "Create time slots before assigning delegation ownership.");
+    return;
+  }
+
+  const visibleAssignments = selects
+    .map((select) => ({
+      select,
+      slot: getDelegationSlotById(select.dataset.slotId),
+      date: select.dataset.date || ""
+    }))
+    .filter((assignment) => assignment.slot && isValidDateInput(assignment.date));
+
+  if (visibleAssignments.length === 0) {
+    showGenericAlert("No slots", "Create time slots before assigning delegation ownership.");
+    return;
+  }
+
+  data.delegations = data.delegations.filter((delegation) => (
+    !visibleAssignments.some(({ slot, date }) => isDelegationForSlotDate(delegation, slot, date))
+  ));
+
+  visibleAssignments.forEach(({ select, slot, date }) => {
+    const delegatorUserId = data.users.some((user) => user.id === select.value) ? select.value : "";
+    data.delegations.push({
+      id: makeRecordId("delegation"),
+      delegatorUserId,
+      systemId: "",
+      slotId: slot.id,
+      slotName: formatDelegationSlotTimeRange(slot),
+      date,
+      start: slot.start,
+      end: slot.end,
+      timezoneId: "et",
+      timeZone: EASTERN_TIME_ZONE,
+      timezoneLabel: "Eastern (New York)",
+      note: ""
+    });
+  });
+
+  completeAdminSave("Delegation ownership saved.");
+}
+
+function removeDelegationSlot(slotId) {
+  const slot = getDelegationSlotById(slotId);
+  if (!slot) {
+    return;
+  }
+
+  showGenericConfirm("Delete coverage slot", `Delete ${formatDelegationSlotDefinition(slot)}? Existing scheduled assignments keep their saved time.`, () => {
+    data.delegationSlots = data.delegationSlots.filter((item) => item.id !== slotId);
+    data.delegations.forEach((delegation) => {
+      if (delegation.slotId === slotId) {
+        delegation.slotId = "";
+      }
+    });
+    completeAdminSave("Coverage slot deleted.");
+  });
+}
+
+function addDelegation(event) {
+  event.preventDefault();
+  const selectedSlot = getSelectedDelegationSlot();
+  if (!selectedSlot) {
+    showGenericAlert("Missing coverage slot", "Create and choose a predefined coverage slot before assigning a delegator.");
+    return;
+  }
+
+  const date = elements.delegationDateInput?.value || "";
+  if (!isValidDateInput(date)) {
+    showGenericAlert("Missing date", "Choose a local date for the delegation slot.");
+    return;
+  }
+
+  const delegatorUserId = data.users.some((user) => user.id === elements.delegationUserSelect?.value)
+    ? elements.delegationUserSelect.value
+    : "";
+  const delegation = {
+    id: makeRecordId("delegation"),
+    delegatorUserId,
+    systemId: "",
+    slotId: selectedSlot.id,
+    slotName: formatDelegationSlotTimeRange(selectedSlot),
+    date,
+    start: selectedSlot.start,
+    end: selectedSlot.end,
+    timezoneId: "et",
+    timeZone: EASTERN_TIME_ZONE,
+    timezoneLabel: "Eastern (New York)",
+    note: elements.delegationNoteInput?.value.trim() || ""
+  };
+
+  const overlap = getDelegationOverlap(delegation);
+  if (overlap) {
+    showGenericAlert("Delegation overlap", `This slot overlaps ${formatDelegationMeta(overlap)}.`);
+    return;
+  }
+
+  data.delegations.push(delegation);
+  elements.delegationNoteInput.value = "";
+  if (elements.delegationGraphDateInput) {
+    elements.delegationGraphDateInput.value = date;
+  }
+  completeAdminSave("Delegation assignment saved.");
+}
+
+function removeDelegation(delegationId) {
+  const delegation = data.delegations.find((item) => item.id === delegationId);
+  if (!delegation) {
+    return;
+  }
+
+  showGenericConfirm("Delete delegation", "Delete this delegation slot?", () => {
+    data.delegations = data.delegations.filter((item) => item.id !== delegationId);
+    completeAdminSave("Delegation slot deleted.");
+  });
+}
+
+function getSortedDelegations(delegations) {
+  return delegations
+    .slice()
+    .sort(compareDelegationsByStart);
+}
+
+function getCurrentDelegations(easternNow) {
+  return getSortedDelegations(data.delegations)
+    .filter((delegation) => isDelegationActive(delegation, easternNow));
+}
+
+function compareDelegationsByStart(left, right) {
+  return getDelegationInstant(left, "start").getTime() - getDelegationInstant(right, "start").getTime()
+    || getDelegationUserName(left).localeCompare(getDelegationUserName(right))
+    || getDelegationSystemName(left).localeCompare(getDelegationSystemName(right));
+}
+
+function getDelegationStatus(delegation, easternNow) {
+  if (isDelegationActive(delegation, easternNow)) {
+    return { status: "active", label: "Current" };
+  }
+
+  if (isDelegationPast(delegation, easternNow)) {
+    return { status: "past", label: "Past" };
+  }
+
+  return { status: "upcoming", label: "Upcoming" };
+}
+
+function isDelegationActive(delegation, easternNow) {
+  const now = zonedWallTimeToDate(easternNow.date, easternNow.time, EASTERN_TIME_ZONE).getTime();
+  return getDelegationInstant(delegation, "start").getTime() <= now
+    && now < getDelegationInstant(delegation, "end").getTime();
+}
+
+function isDelegationPast(delegation, easternNow) {
+  const now = zonedWallTimeToDate(easternNow.date, easternNow.time, EASTERN_TIME_ZONE).getTime();
+  return getDelegationInstant(delegation, "end").getTime() <= now;
+}
+
+function getDelegationUserName(delegation) {
+  if (!delegation.delegatorUserId) {
+    return "Unassigned";
+  }
+
+  return data.users.find((user) => user.id === delegation.delegatorUserId)?.name || "Removed user";
+}
+
+function getDelegationSystemName(delegation) {
+  if (!delegation.systemId) {
+    return "All coverage";
+  }
+
+  return data.systems.find((system) => system.id === delegation.systemId)?.name || "Removed coverage";
+}
+
+function formatDelegationMeta(delegation) {
+  const abbreviation = getSelectedTimezoneAbbreviationForDelegation(delegation);
+  return `${getDelegationSystemName(delegation)} · ${formatDisplayDate(delegation.date)} · ${formatDelegationRecordDisplayTimeRange(delegation)} ${abbreviation}`;
+}
+
+function formatDelegationSlotTimeRange(delegation) {
+  return `${delegation.start}–${delegation.end}`;
+}
+
+function formatDelegationSlotDisplayTimeRange(slot, date = getDelegationReferenceDate()) {
+  return formatTimeRangeForDisplay(date, slot.start, slot.end, EASTERN_TIME_ZONE);
+}
+
+function formatDelegationRecordDisplayTimeRange(delegation) {
+  return formatTimeRangeForDisplay(delegation.date, delegation.start, delegation.end, getDelegationTimezone(delegation).timeZone);
+}
+
+function formatTimeRangeForDisplay(date, start, end, sourceTimeZone = EASTERN_TIME_ZONE) {
+  return `${formatTimeInputForDisplay(date, start, sourceTimeZone)}–${formatTimeInputForDisplay(date, end, sourceTimeZone)}`;
+}
+
+function formatDelegationSlotDefinition(slot) {
+  const date = getDelegationReferenceDate();
+  const abbreviation = getSelectedTimezoneAbbreviationForEasternTime(date, slot.start);
+  return `${formatDelegationSlotDisplayTimeRange(slot, date)} ${abbreviation}`;
+}
+
+function getSelectedDelegationSlot() {
+  return getDelegationSlotById(elements.delegationSlotSelect?.value || "");
+}
+
+function getDelegationSlotById(slotId) {
+  return data.delegationSlots.find((slot) => slot.id === slotId) || null;
+}
+
+function getSortedDelegationSlots(slots = data.delegationSlots) {
+  return slots
+    .slice()
+    .sort(compareDelegationSlots);
+}
+
+function compareDelegationSlots(left, right) {
+  return toMinutes(left.start) - toMinutes(right.start)
+    || toMinutes(left.end) - toMinutes(right.end)
+    || left.id.localeCompare(right.id);
+}
+
+function getDelegationSlotDefinitionOverlap(nextSlot) {
+  return data.delegationSlots.find((slot) => (
+    slot.id !== nextSlot.id
+      && delegationSlotsOverlap(slot, nextSlot)
+  ));
+}
+
+function getDelegationsForLocalDate(date) {
+  return getSortedDelegations(data.delegations)
+    .filter((delegation) => delegation.date === date);
+}
+
+function getDelegationForSlotDate(slot, date) {
+  return data.delegations.find((delegation) => isDelegationForSlotDate(delegation, slot, date)) || null;
+}
+
+function isDelegationForSlotDate(delegation, slot, date) {
+  return Boolean(slot)
+    && delegation.date === date
+    && (
+      delegation.slotId === slot.id
+        || (!delegation.slotId && delegation.start === slot.start && delegation.end === slot.end)
+    );
+}
+
+function getDelegationOverlap(nextDelegation) {
+  return data.delegations.find((delegation) => (
+    delegation.id !== nextDelegation.id
+      && delegation.date === nextDelegation.date
+      && delegationSlotsOverlap(delegation, nextDelegation)
+  ));
+}
+
+function delegationSlotsOverlap(left, right) {
+  return toMinutes(left.start) < toMinutes(right.end)
+    && toMinutes(right.start) < toMinutes(left.end);
+}
+
+function getDelegationInstant(delegation, boundary) {
+  const timezone = getDelegationTimezone(delegation);
+  const time = boundary === "end" ? delegation.end : delegation.start;
+  return zonedWallTimeToDate(delegation.date, time, timezone.timeZone);
+}
+
+function getDelegationTimezone(delegation) {
+  const timezoneId = delegation.timezoneId || delegation.timeZoneId;
+  const byId = timezoneId
+    ? getDisplayTimezones().find((timezone) => timezone.id === timezoneId)
+      || AVAILABLE_TIMEZONES.find((timezone) => timezone.id === timezoneId)
+    : null;
+  const byZone = delegation.timeZone
+    ? getDisplayTimezones().find((timezone) => timezone.timeZone === delegation.timeZone)
+      || AVAILABLE_TIMEZONES.find((timezone) => timezone.timeZone === delegation.timeZone)
+    : null;
+  return byId || byZone || {
+    id: timezoneId || "et",
+    timeZone: delegation.timeZone || EASTERN_TIME_ZONE,
+    label: delegation.timezoneLabel || "Eastern (New York)"
+  };
+}
+
+function isSlotAlignedTimeRange(start, end) {
+  return toMinutes(start) % SLOT_MINUTES === 0 && toMinutes(end) % SLOT_MINUTES === 0;
+}
+
+function advanceDelegationFormAfterSave(previousEnd) {
+  const nextStartMinutes = toMinutes(previousEnd);
+  if (!elements.delegationStartInput || !elements.delegationEndInput || nextStartMinutes >= TIMELINE_END_MINUTES) {
+    return;
+  }
+
+  const nextEndMinutes = Math.min(nextStartMinutes + SLOT_MINUTES, TIMELINE_END_MINUTES);
+  if (nextStartMinutes < nextEndMinutes) {
+    elements.delegationStartInput.value = minutesToTime(nextStartMinutes);
+    elements.delegationEndInput.value = minutesToTime(nextEndMinutes);
+  }
+}
+
 function addSystem(event) {
   event.preventDefault();
   if (!isAdminTabUnlocked("systems")) {
@@ -3043,7 +4227,7 @@ function addSystem(event) {
   data.systems.push({ id, name, primaryUserIds: [] });
   data.queues[id] = 0;
   elements.addSystemForm.reset();
-  completeAdminSave("System saved.", "systems");
+  completeAdminSave("System saved.");
 }
 
 function removeSystem(systemId) {
@@ -3052,14 +4236,16 @@ function removeSystem(systemId) {
   }
 
   const system = data.systems.find((item) => item.id === systemId);
-  if (!system || !window.confirm(`Remove ${system.name}?`)) {
+  if (!system) {
     return;
   }
 
-  data.systems = data.systems.filter((item) => item.id !== systemId);
-  delete data.queues[systemId];
-  selectedAssigneeId = null;
-  completeAdminSave("System removed.", "systems");
+  showGenericConfirm("Remove system", `Remove ${system.name}?`, () => {
+    data.systems = data.systems.filter((item) => item.id !== systemId);
+    delete data.queues[systemId];
+    clearSelectedAssignee();
+    completeAdminSave("System removed.");
+  });
 }
 
 function toggleCoverage(systemId, userId, checked) {
@@ -3081,8 +4267,8 @@ function toggleCoverage(systemId, userId, checked) {
   }
 
   clampQueue(systemId);
-  selectedAssigneeId = null;
-  completeAdminSave("Coverage mapping saved.", "systems");
+  clearSelectedAssignee();
+  completeAdminSave("Coverage mapping saved.");
 }
 
 function moveCoveredUser(systemId, userId, direction) {
@@ -3103,8 +4289,29 @@ function moveCoveredUser(systemId, userId, direction) {
 
   [system.primaryUserIds[currentIndex], system.primaryUserIds[nextIndex]] = [system.primaryUserIds[nextIndex], system.primaryUserIds[currentIndex]];
   clampQueue(systemId);
-  selectedAssigneeId = null;
-  completeAdminSave("System priority saved.", "systems");
+  clearSelectedAssignee();
+  completeAdminSave("System priority saved.");
+}
+
+function removeCoveredUser(systemId, userId) {
+  if (!isAdminTabUnlocked("systems")) {
+    return;
+  }
+
+  const system = data.systems.find((item) => item.id === systemId);
+  if (!system || !system.primaryUserIds.includes(userId)) {
+    return;
+  }
+
+  system.primaryUserIds = system.primaryUserIds.filter((id) => id !== userId);
+  clampQueue(systemId);
+  if (selectedAssigneeId === userId) {
+    clearSelectedAssignee();
+  }
+  if (selectedOtherAssigneeId === userId) {
+    selectedOtherAssigneeId = null;
+  }
+  completeAdminSave("Coverage user removed.");
 }
 
 function addHoliday(event) {
@@ -3114,7 +4321,7 @@ function addHoliday(event) {
   }
 
   if (!elements.holidayDateInput.value) {
-    window.alert("Choose a holiday date.");
+    showGenericAlert("Missing date", "Choose a holiday date.");
     return;
   }
 
@@ -3126,7 +4333,7 @@ function addHoliday(event) {
   });
 
   elements.holidayNameInput.value = "";
-  completeAdminSave("Holiday saved.", "holidays");
+  completeAdminSave("Holiday saved.");
 }
 
 function removeHoliday(holidayId) {
@@ -3188,7 +4395,7 @@ function confirmRemoveHoliday() {
 
 function performRemoveHoliday(holidayId) {
   data.holidays = data.holidays.filter((holiday) => holiday.id !== holidayId);
-  completeAdminSave("Holiday removed.", "holidays");
+  completeAdminSave("Holiday removed.");
 }
 
 function getHolidayUserName(holiday) {
@@ -3209,51 +4416,106 @@ function markSelectedAssigned() {
     return;
   }
 
+  const assignmentRow = selectedRow.isOther ? getSelectedOtherRosterRow(queueState) : selectedRow;
+  if (!assignmentRow) {
+    return;
+  }
+
   const assignmentRecord = {
     id: makeRecordId("assignment"),
     assignedAt: new Date().toISOString(),
     easternDate: queueState.effectiveNow.date,
     easternTime: queueState.effectiveNow.date === easternNow.date
       ? easternNow.time
-      : minutesToTime(selectedRow.availabilityStart),
+      : minutesToTime(assignmentRow.availabilityStart),
     systemId: queueState.system.id,
     systemName: queueState.system.name,
-    userId: selectedRow.user.id,
-    userName: selectedRow.user.name
+    userId: assignmentRow.user.id,
+    userName: assignmentRow.user.name
   };
   data.assignmentLog.push(assignmentRecord);
   lastAssignmentId = assignmentRecord.id;
 
-  const originalIndex = queueState.system.primaryUserIds.indexOf(selectedRow.user.id);
-  if (originalIndex >= 0) {
+  const originalIndex = queueState.system.primaryUserIds.indexOf(assignmentRow.user.id);
+  if (!selectedRow.isOther && originalIndex >= 0) {
     data.queues[queueState.system.id] = (originalIndex + 1) % queueState.system.primaryUserIds.length;
   }
 
-  selectedAssigneeId = null;
+  clearSelectedAssignee();
   completeDataSave("Ticket assigned.", { showToast: false });
 }
 
 function getQueueState(systemId, easternNow) {
   const system = getAssignmentSystemById(systemId);
   if (!system) {
-    return { system: null, rows: [], recommendedRow: null, effectiveNow: easternNow };
+    return { system: null, rows: [], otherRows: [], recommendedRow: null, effectiveNow: easternNow };
   }
 
   const effectiveNow = getEffectiveQueueNow(easternNow);
   const isShiftQueue = system.id === SHIFT_QUEUE_SYSTEM_ID;
-  const rows = data.users.map((user) => {
-    const systemPriority = isShiftQueue ? -1 : system.primaryUserIds.indexOf(user.id);
-    const isCoverageMember = isShiftQueue || systemPriority >= 0;
-    const queuePriority = isShiftQueue ? Number.POSITIVE_INFINITY : getRotatedQueuePriority(system, systemPriority);
-    const status = getUserStatus(user, effectiveNow);
-    const waitMinutes = getAvailabilityWaitMinutes(easternNow, effectiveNow, status);
-    const metrics = getAssignmentMetrics(user, systemPriority, queuePriority, effectiveNow, status, waitMinutes);
-    return { user, isCoverageMember, effectiveDate: effectiveNow.date, effectiveDay: effectiveNow.day, ...status, ...metrics };
-  }).sort(compareQueueRows);
+  const allRows = getQueueUserRowsForSystem(system, easternNow, effectiveNow, isShiftQueue);
+  const otherRows = isShiftQueue ? [] : getGlobalRosterRows(easternNow, effectiveNow, system.primaryUserIds);
+  const rows = isShiftQueue
+    ? allRows
+    : allRows.filter((row) => row.isCoverageMember).concat(getOtherQueueRow(otherRows, effectiveNow, selectedOtherAssigneeId));
 
   const recommendedRow = rows.find((row) => row.selectable) || null;
 
-  return { system, rows, recommendedRow, effectiveNow };
+  return { system, rows, otherRows, recommendedRow, effectiveNow };
+}
+
+function getQueueUserRowsForSystem(system, easternNow, effectiveNow, isShiftQueue = false) {
+  return data.users.map((user) => {
+    const systemPriority = isShiftQueue ? -1 : system.primaryUserIds.indexOf(user.id);
+    const isCoverageMember = isShiftQueue || systemPriority >= 0;
+    const queuePriority = isShiftQueue ? Number.POSITIVE_INFINITY : getRotatedQueuePriority(system, systemPriority);
+    return buildQueueUserRow(user, easternNow, effectiveNow, systemPriority, queuePriority, isCoverageMember);
+  }).sort(compareQueueRows);
+}
+
+function getGlobalRosterRows(easternNow, effectiveNow, excludedUserIds = []) {
+  const excludedIds = new Set(excludedUserIds);
+  return data.users
+    .filter((user) => !excludedIds.has(user.id))
+    .map((user) => (
+      buildQueueUserRow(user, easternNow, effectiveNow, -1, Number.POSITIVE_INFINITY, true)
+    ))
+    .sort(compareQueueRows);
+}
+
+function buildQueueUserRow(user, easternNow, effectiveNow, systemPriority, queuePriority, isCoverageMember) {
+  const status = getUserStatus(user, effectiveNow);
+  const waitMinutes = getAvailabilityWaitMinutes(easternNow, effectiveNow, status);
+  const metrics = getAssignmentMetrics(user, systemPriority, queuePriority, effectiveNow, status, waitMinutes);
+  return { user, isCoverageMember, effectiveDate: effectiveNow.date, effectiveDay: effectiveNow.day, ...status, ...metrics };
+}
+
+function getOtherQueueRow(otherRows, effectiveNow, selectedOtherUserId = null) {
+  const selectedRosterRow = otherRows.find((row) => row.user.id === selectedOtherUserId && row.selectable)
+    || otherRows.find((row) => row.selectable)
+    || null;
+  return {
+    isOther: true,
+    user: { id: OTHER_QUEUE_USER_ID, name: OTHER_QUEUE_USER_NAME },
+    isCoverageMember: true,
+    effectiveDate: selectedRosterRow?.effectiveDate || effectiveNow.date,
+    effectiveDay: selectedRosterRow?.effectiveDay || effectiveNow.day,
+    status: selectedRosterRow?.status || "unavailable",
+    badge: selectedRosterRow ? "Roster" : "No roster",
+    selectable: Boolean(selectedRosterRow),
+    availabilityStart: selectedRosterRow?.availabilityStart ?? Number.POSITIVE_INFINITY,
+    message: selectedRosterRow
+      ? `${selectedRosterRow.user.name} · ${formatOtherRosterAvailability(selectedRosterRow)}.`
+      : "No one outside this queue.",
+    waitMinutes: selectedRosterRow?.waitMinutes ?? Number.POSITIVE_INFINITY,
+    dailyTickets: 0,
+    consecutiveTickets: 0,
+    lastTicketToday: Number.NEGATIVE_INFINITY,
+    systemPriority: Number.POSITIVE_INFINITY,
+    queuePriority: Number.POSITIVE_INFINITY,
+    teamPriority: Number.POSITIVE_INFINITY,
+    scheduleStart: selectedRosterRow?.scheduleStart ?? Number.POSITIVE_INFINITY
+  };
 }
 
 function getAssignmentSystemById(systemId) {
@@ -3442,7 +4704,7 @@ function getRecentAssignments() {
   const cutoff = Date.now() - RECENT_ASSIGNMENTS_WINDOW_MS;
   return data.assignmentLog
     .filter((entry) => getAssignmentCreatedTimestamp(entry) >= cutoff)
-    .sort((left, right) => getAssignmentCreatedTimestamp(right) - getAssignmentCreatedTimestamp(left));
+    .sort((left, right) => getAssignmentCreatedTimestamp(left) - getAssignmentCreatedTimestamp(right));
 }
 
 function getAssignmentCreatedTimestamp(entry) {
@@ -3722,10 +4984,10 @@ function importData(event) {
       const imported = JSON.parse(String(reader.result));
       validateData(imported);
       data = imported;
-      selectedAssigneeId = null;
+      clearSelectedAssignee();
       completeAdminSave("Backup imported.", "data");
     } catch (error) {
-      window.alert(`Could not import JSON: ${error.message}`);
+      showGenericAlert("Import failed", `Could not import JSON: ${error.message}`);
     } finally {
       event.target.value = "";
     }
@@ -3738,13 +5000,11 @@ function resetData() {
     return;
   }
 
-  if (!window.confirm("Reset to sample data? This replaces local browser data.")) {
-    return;
-  }
-
-  data = cloneData(defaultData);
-  selectedAssigneeId = null;
-  completeAdminSave("Sample data restored.", "data");
+  showGenericConfirm("Reset data", "Reset to sample data? This replaces local browser data.", () => {
+    data = cloneData(defaultData);
+    clearSelectedAssignee();
+    completeAdminSave("Sample data restored.", "data");
+  });
 }
 
 function loadData() {
@@ -3810,7 +5070,7 @@ async function refreshSharedStateIfIdle() {
     }
 
     applySharedStatePayload(payload);
-    selectedAssigneeId = null;
+    clearSelectedAssignee();
     editingAssignmentId = null;
     editingSchedule = null;
     timelineDrafts = [];
@@ -3896,7 +5156,7 @@ async function handleSharedStateConflict(payload) {
     applySharedStatePayload(latestPayload);
   }
 
-  selectedAssigneeId = null;
+  clearSelectedAssignee();
   lastAssignmentId = null;
   editingAssignmentId = null;
   editingSchedule = null;
@@ -3911,7 +5171,7 @@ async function handleSharedStateConflict(payload) {
 function handleSharedStateSaveError(error) {
   sharedStateGeneration += 1;
   data = cloneData(lastPersistedData);
-  selectedAssigneeId = null;
+  clearSelectedAssignee();
   editingAssignmentId = null;
   editingSchedule = null;
   timelineDrafts = [];
@@ -3924,7 +5184,7 @@ function handleSharedStateSaveError(error) {
 
 function showSyncStateModal(title, message) {
   if (!elements.syncStateModal) {
-    window.alert(`${title}\n\n${message}`);
+    showGenericAlert(title, message);
     return;
   }
 
@@ -3949,6 +5209,109 @@ function closeSyncStateModal() {
   elements.syncStateModal.setAttribute("aria-hidden", "true");
 }
 
+let pendingConfirmCallback = null;
+
+function showGenericAlert(title, message) {
+  if (!elements.genericAlertModal) {
+    window.alert(`${title}\n\n${message}`);
+    return;
+  }
+
+  if (elements.genericAlertModalTitle) {
+    elements.genericAlertModalTitle.textContent = title;
+  }
+  if (elements.genericAlertModalMessage) {
+    elements.genericAlertModalMessage.textContent = message;
+  }
+
+  elements.genericAlertModal.classList.remove("hidden");
+  elements.genericAlertModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.closeGenericAlertButton?.focus(), 0);
+}
+
+function closeGenericAlert() {
+  if (!elements.genericAlertModal) {
+    return;
+  }
+
+  elements.genericAlertModal.classList.add("hidden");
+  elements.genericAlertModal.setAttribute("aria-hidden", "true");
+}
+
+function showGenericConfirm(title, message, onConfirm) {
+  if (!elements.genericConfirmModal) {
+    if (window.confirm(`${title}\n\n${message}`)) {
+      onConfirm();
+    }
+    return;
+  }
+
+  pendingConfirmCallback = onConfirm;
+  if (elements.genericConfirmModalTitle) {
+    elements.genericConfirmModalTitle.textContent = title;
+  }
+  if (elements.genericConfirmModalMessage) {
+    elements.genericConfirmModalMessage.textContent = message;
+  }
+
+  elements.genericConfirmModal.classList.remove("hidden");
+  elements.genericConfirmModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.cancelGenericConfirmButton?.focus(), 0);
+}
+
+function closeGenericConfirm() {
+  pendingConfirmCallback = null;
+  if (!elements.genericConfirmModal) {
+    return;
+  }
+
+  elements.genericConfirmModal.classList.add("hidden");
+  elements.genericConfirmModal.setAttribute("aria-hidden", "true");
+}
+
+function confirmGenericConfirm() {
+  const callback = pendingConfirmCallback;
+  closeGenericConfirm();
+  if (callback) {
+    callback();
+  }
+}
+
+function openContactDevModal() {
+  if (!elements.contactDevModal) {
+    return;
+  }
+
+  elements.contactDevModal.classList.remove("hidden");
+  elements.contactDevModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.closeContactDevModalButton?.focus(), 0);
+}
+
+function closeContactDevModal() {
+  if (!elements.contactDevModal) {
+    return;
+  }
+
+  elements.contactDevModal.classList.add("hidden");
+  elements.contactDevModal.setAttribute("aria-hidden", "true");
+}
+
+function copyContactEmail() {
+  const email = elements.contactEmailDisplay?.textContent || "";
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(email).catch(() => {});
+  }
+
+  if (elements.copyContactEmailButton) {
+    elements.copyContactEmailButton.textContent = "Copied!";
+    window.setTimeout(() => {
+      if (elements.copyContactEmailButton) {
+        elements.copyContactEmailButton.textContent = "Copy";
+      }
+    }, 2000);
+  }
+}
+
 function loadDebugTimeOverride() {
   try {
     const saved = localStorage.getItem(DEBUG_TIME_STORAGE_KEY);
@@ -3965,16 +5328,44 @@ function loadDebugTimeOverride() {
   }
 }
 
+function detectDisplayTimezone() {
+  try {
+    const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const map = {
+      "America/New_York": "et", "America/Detroit": "et", "America/Toronto": "et",
+      "America/Montreal": "et", "America/Iqaluit": "et", "America/Nassau": "et",
+      "America/Thule": "et", "America/Grand_Turk": "et",
+      "UTC": "utc", "Etc/UTC": "utc", "Etc/UCT": "utc", "Etc/Universal": "utc",
+      "Europe/London": "london", "Europe/Belfast": "london", "Europe/Dublin": "london",
+      "Europe/Guernsey": "london", "Europe/Isle_of_Man": "london", "Europe/Jersey": "london",
+      "Atlantic/Canary": "london", "Atlantic/Faroe": "london", "Atlantic/Madeira": "london",
+      "Asia/Kolkata": "ist", "Asia/Calcutta": "ist"
+    };
+    return map[detected] || null;
+  } catch {
+    return null;
+  }
+}
+
 function loadDisplayTimezone() {
   try {
-    return getDisplayTimezone(localStorage.getItem(DISPLAY_TIMEZONE_STORAGE_KEY)).id;
+    const saved = localStorage.getItem(DISPLAY_TIMEZONE_STORAGE_KEY);
+    if (saved) {
+      return getDisplayTimezone(saved).id;
+    }
+    const detected = detectDisplayTimezone();
+    if (detected) {
+      localStorage.setItem(DISPLAY_TIMEZONE_STORAGE_KEY, detected);
+      return detected;
+    }
+    return getDisplayTimezones()[0].id;
   } catch {
-    return DISPLAY_TIMEZONES[0].id;
+    return getDisplayTimezones()[0].id;
   }
 }
 
 function getDisplayTimezone(timezoneId) {
-  return DISPLAY_TIMEZONES.find((timezone) => timezone.id === timezoneId) || DISPLAY_TIMEZONES[0];
+  return getDisplayTimezones().find((timezone) => timezone.id === timezoneId) || getDisplayTimezones()[0];
 }
 
 function getSelectedDisplayTimezone() {
@@ -4023,6 +5414,21 @@ function normalizeData() {
   data.assignmentRules.preset = getAssignmentRulePreset(data.assignmentRules.preset).id;
   data.exceptions = Array.isArray(data.exceptions) ? data.exceptions : [];
   data.holidays = Array.isArray(data.holidays) ? data.holidays : [];
+  data.regionsEnabled = data.regionsEnabled !== false;
+  data.regions = Array.isArray(data.regions) ? data.regions : cloneData(DEFAULT_REGIONS);
+  const normalizedRegions = [];
+  data.regions.forEach((region) => {
+    const name = String(region?.name || region?.label || "").trim();
+    if (!name) {
+      return;
+    }
+    normalizedRegions.push({
+      id: makeId(region.id || name, normalizedRegions.map((item) => item.id)),
+      name
+    });
+  });
+  data.regions = normalizedRegions;
+
   data.shiftTemplates = Array.isArray(data.shiftTemplates) && data.shiftTemplates.length > 0
     ? data.shiftTemplates
     : cloneData(DEFAULT_SHIFT_TEMPLATES);
@@ -4032,14 +5438,28 @@ function normalizeData() {
     start: template.start || "09:00",
     end: template.end || "17:00"
   }));
+  data.shiftTemplates.forEach((template) => normalizeForwardTimeFields(template, "09:00", "17:00"));
+  data.displayTimezones = Array.isArray(data.displayTimezones) && data.displayTimezones.length > 0
+    ? data.displayTimezones.map((tz) => {
+        if (!tz.label) {
+          const match = AVAILABLE_TIMEZONES.find((a) => a.id === tz.id);
+          return { ...tz, label: match?.label || tz.id };
+        }
+        return tz;
+      })
+    : cloneData(DEFAULT_DISPLAY_TIMEZONES);
   data.queues = data.queues && typeof data.queues === "object" ? data.queues : {};
+  const validRegionIds = new Set(data.regions.map((region) => region.id));
 
   data.users.forEach((user) => {
+    user.regionIds = Array.from(new Set(Array.isArray(user.regionIds) ? user.regionIds : []))
+      .filter((regionId) => validRegionIds.has(regionId));
     user.schedules = Array.isArray(user.schedules) ? user.schedules : [];
     user.schedules.forEach((schedule) => {
       schedule.id ||= makeRecordId("schedule");
       schedule.shiftType ||= inferShiftType(schedule.start, schedule.end);
       schedule.days = Array.isArray(schedule.days) ? schedule.days : [];
+      normalizeForwardTimeFields(schedule, "09:00", "17:00");
       if (schedule.startDate && !isValidDateInput(schedule.startDate)) {
         delete schedule.startDate;
       }
@@ -4057,13 +5477,16 @@ function normalizeData() {
     slot.id ||= makeRecordId("slot");
     slot.type = slot.type === "extra" ? "extra" : "break";
     slot.reason ||= "";
+    normalizeForwardTimeFields(slot, "12:00", "12:30");
   });
+  data.exceptions.sort(compareDateTimeRecords);
 
   data.holidays.forEach((holiday) => {
     holiday.id ||= makeRecordId("holiday");
     holiday.userId ||= GLOBAL_HOLIDAY_USER_ID;
     holiday.name ||= "Holiday";
   });
+  data.holidays.sort((left, right) => (left.date || "").localeCompare(right.date || ""));
 
   data.systems.forEach((system) => {
     system.primaryUserIds = system.primaryUserIds.filter((userId) => data.users.some((user) => user.id === userId));
@@ -4073,7 +5496,103 @@ function normalizeData() {
     clampQueue(system.id);
   });
 
+  const normalizedDelegationSlots = [];
+  (Array.isArray(data.delegationSlots) ? data.delegationSlots : []).forEach((slot) => {
+    const normalized = normalizeDelegationSlotRecord(slot, normalizedDelegationSlots.map((item) => item.id));
+    if (normalized) {
+      normalizedDelegationSlots.push(normalized);
+    }
+  });
+  data.delegationSlots = normalizedDelegationSlots.sort(compareDelegationSlots);
+
+  data.delegations = Array.isArray(data.delegations) ? data.delegations : [];
+  data.delegations = data.delegations
+    .map(normalizeDelegationRecord)
+    .filter(Boolean);
+  data.delegations.sort(compareDelegationsByStart);
+  data.assignmentLog.sort((left, right) => getAssignmentTimestamp(left) - getAssignmentTimestamp(right));
+
   rebuildQueuesFromAssignmentLog();
+}
+
+function normalizeDelegationSlotRecord(slot, existingIds = []) {
+  slot = slot && typeof slot === "object" ? slot : {};
+  const start = isValidTimeInput(slot.start || "") ? slot.start : "09:00";
+  const end = isValidTimeInput(slot.end || "") ? slot.end : "09:30";
+
+  const normalized = {
+    id: makeId(slot.id || `delegation-${start}-${end}`, existingIds),
+    name: "",
+    start,
+    end
+  };
+
+  if (!isForwardTimeRange(normalized.start, normalized.end)) {
+    normalized.start = "09:00";
+    normalized.end = "09:30";
+  }
+  normalized.name = formatDelegationSlotTimeRange(normalized);
+
+  return normalized;
+}
+
+function normalizeDelegationRecord(delegation) {
+  delegation = delegation && typeof delegation === "object" ? delegation : {};
+  const slot = getDelegationSlotById(delegation.slotId);
+  const fallbackTimezone = {
+    id: "et",
+    timeZone: EASTERN_TIME_ZONE,
+    label: "Eastern (New York)"
+  };
+  const timezone = getDisplayTimezones().find((item) => item.id === (delegation.timezoneId || delegation.timeZoneId))
+    || AVAILABLE_TIMEZONES.find((item) => item.id === (delegation.timezoneId || delegation.timeZoneId))
+    || getDisplayTimezones().find((item) => item.timeZone === delegation.timeZone)
+    || AVAILABLE_TIMEZONES.find((item) => item.timeZone === delegation.timeZone)
+    || fallbackTimezone;
+  const fallbackDate = getEasternNow().date;
+  const date = isValidDateInput(delegation.date || "")
+    ? delegation.date
+    : isValidDateInput(delegation.startDate || "")
+      ? delegation.startDate
+      : fallbackDate;
+  const normalized = {
+    id: delegation.id || makeRecordId("delegation"),
+    delegatorUserId: data.users.some((user) => user.id === delegation.delegatorUserId) ? delegation.delegatorUserId : "",
+    systemId: "",
+    slotId: slot?.id || "",
+    slotName: "",
+    date,
+    start: isValidTimeInput(delegation.start || "") ? delegation.start : slot?.start || "09:00",
+    end: isValidTimeInput(delegation.end || "") ? delegation.end : slot?.end || "09:30",
+    timezoneId: timezone.id,
+    timeZone: timezone.timeZone,
+    timezoneLabel: timezone.label,
+    note: delegation.note || ""
+  };
+
+  if (!isForwardTimeRange(normalized.start, normalized.end)) {
+    normalized.start = "09:00";
+    normalized.end = "09:30";
+  }
+  normalized.slotName = formatDelegationSlotTimeRange(normalized);
+
+  return isValidDateInput(normalized.date) ? normalized : null;
+}
+
+function normalizeForwardTimeFields(record, fallbackStart, fallbackEnd) {
+  if (!isValidTimeInput(record.start || "")) {
+    record.start = fallbackStart;
+  }
+  if (!isValidTimeInput(record.end || "")) {
+    record.end = fallbackEnd;
+  }
+  if (toMinutes(record.start) > toMinutes(record.end)) {
+    [record.start, record.end] = [record.end, record.start];
+  }
+  if (!isForwardTimeRange(record.start, record.end)) {
+    record.start = fallbackStart;
+    record.end = fallbackEnd;
+  }
 }
 
 function rebuildQueuesFromAssignmentLog() {
@@ -4114,6 +5633,14 @@ function setDefaultDates() {
 
   if (elements.holidayDateInput) {
     elements.holidayDateInput.value ||= today;
+  }
+
+  if (elements.delegationDateInput) {
+    elements.delegationDateInput.value ||= today;
+  }
+
+  if (elements.delegationGraphDateInput) {
+    elements.delegationGraphDateInput.value ||= elements.delegationDateInput?.value || today;
   }
 }
 
@@ -4162,6 +5689,19 @@ function updateScheduleRangeConstraints() {
   }
 
   elements.scheduleEndDateInput.min = elements.scheduleStartDateInput.value || "";
+}
+
+function updateForwardTimeInputConstraints() {
+  [
+    [elements.scheduleStartInput, elements.scheduleEndInput],
+    [elements.slotStartInput, elements.slotEndInput],
+    [elements.shiftStartInput, elements.shiftEndInput],
+    [elements.delegationStartInput, elements.delegationEndInput]
+  ].forEach(([startInput, endInput]) => {
+    if (startInput && endInput) {
+      endInput.min = startInput.value || "";
+    }
+  });
 }
 
 function getBusinessWeekRange(date) {
@@ -4359,17 +5899,37 @@ function getScheduleReferenceDate() {
   return elements.timelineDateInput?.value || getEasternNow().date;
 }
 
+function getDelegationReferenceDate() {
+  return elements.delegationGraphDateInput?.value
+    || elements.delegationDateInput?.value
+    || getEasternNow().date;
+}
+
 function getSelectedTimezoneAbbreviationForDate(date) {
   const referenceDate = zonedWallTimeToDate(date, "12:00", EASTERN_TIME_ZONE);
   return getTimezoneAbbreviation(referenceDate, getSelectedDisplayTimezone());
 }
 
+function getSelectedTimezoneAbbreviationForEasternTime(date, time) {
+  const referenceDate = zonedWallTimeToDate(date, time, EASTERN_TIME_ZONE);
+  return getTimezoneAbbreviation(referenceDate, getSelectedDisplayTimezone());
+}
+
+function getSelectedTimezoneAbbreviationForDelegation(delegation) {
+  const referenceDate = zonedWallTimeToDate(delegation.date, delegation.start, getDelegationTimezone(delegation).timeZone);
+  return getTimezoneAbbreviation(referenceDate, getSelectedDisplayTimezone());
+}
+
 function formatEasternTimeInputForDisplay(date, time) {
+  return formatTimeInputForDisplay(date, time, EASTERN_TIME_ZONE);
+}
+
+function formatTimeInputForDisplay(date, time, sourceTimeZone = EASTERN_TIME_ZONE) {
   if (!isValidDateInput(date) || !isValidTimeInput(time)) {
     return time || "";
   }
 
-  const instant = zonedWallTimeToDate(date, time, EASTERN_TIME_ZONE);
+  const instant = zonedWallTimeToDate(date, time, sourceTimeZone);
   return getZonedDateTimeParts(instant, getSelectedDisplayTimezone().timeZone).time;
 }
 
@@ -4465,7 +6025,15 @@ function getTimezoneAbbreviation(date, timezone) {
     return offsetMinutes === 60 ? "BST" : "GMT";
   }
 
-  return timezone.id.toUpperCase();
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone.timeZone,
+      timeZoneName: "short"
+    }).formatToParts(date);
+    return parts.find((p) => p.type === "timeZoneName")?.value || timezone.id.toUpperCase();
+  } catch {
+    return timezone.id.toUpperCase();
+  }
 }
 
 function getTimeZoneOffsetMinutes(date, timeZone) {
@@ -4611,7 +6179,38 @@ function roundToNearestSlot(minutes) {
 }
 
 function isValidTimeRange(start, end) {
-  return Boolean(start && end && start !== end);
+  return isForwardTimeRange(start, end);
+}
+
+function isForwardTimeRange(start, end) {
+  return isValidTimeInput(start) && isValidTimeInput(end) && toMinutes(start) < toMinutes(end);
+}
+
+function isForwardDateRange(startDate, endDate) {
+  return isValidDateInput(startDate) && isValidDateInput(endDate) && startDate <= endDate;
+}
+
+function isSameDayForwardEasternRange(start, end) {
+  return start.date === end.date && isForwardTimeRange(start.time, end.time);
+}
+
+function isForwardDateTimeRange(startDate, startTime, endDate, endTime, allowEqual = false) {
+  const comparison = compareDateTimeValues(startDate, startTime, endDate, endTime);
+  return allowEqual ? comparison <= 0 : comparison < 0;
+}
+
+function compareDateTimeRecords(left, right) {
+  return compareDateTimeValues(left.startDate || left.date, left.start, right.startDate || right.date, right.start);
+}
+
+function compareDateTimeValues(startDate, startTime, endDate, endTime) {
+  const left = isValidDateInput(startDate || "") && isValidTimeInput(startTime || "")
+    ? `${startDate} ${startTime}`
+    : "";
+  const right = isValidDateInput(endDate || "") && isValidTimeInput(endTime || "")
+    ? `${endDate} ${endTime}`
+    : "";
+  return left.localeCompare(right);
 }
 
 function getQueueIndex(system) {
