@@ -35,7 +35,8 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 - Admins can turn regional separation on/off, define regions, and assign each user to one or more regions.
 - Admins can define coverage time slots, assign one delegator to each slot/date, and review them in day/week graph views.
 - Admins can choose an assignment recommendation style: schedule-first, balanced, or app expertise first.
-- Admin setup sections are locked by default; unlock before editing users, holidays, shift presets, systems/apps, assignment rules, or data backups.
+- Admins can configure incident creation handoff links and save future ServiceNow / Teams integration settings.
+- Admin setup sections are locked by default; unlock before editing users, holidays, incidents, shift presets, systems/apps, assignment rules, or data backups.
 - Date/time ranges are always stored and displayed from older to newer; reverse start/end entries are rejected.
 - Admins can define what shift presets like `Early`, `Regular`, and `Late` mean.
 - Shift presets only save time; any user can still have a custom shift on any day.
@@ -87,8 +88,11 @@ Admin sections:
 - `Assignment rules`: choose how recommendations are sorted. The default is schedule-first.
 - `Shift presets`: define reusable shift names and times.
 - `Systems / apps`: add systems and assign/reorder primary SMEs.
+- `Incidents`: turn incident creation on/off, configure redirect handoff links, and prepare ServiceNow or Teams settings.
 - `Holidays`: add user-specific or all-team holidays.
 - `Data`: export/import JSON backups.
+
+Incident templates support `{{assignee}}`, `{{assignee_mention}}`, `{{coverage}}`, `{{assigned_at}}`, `{{incident_url}}`, `{{servicenow_incident_description}}`, and `{{servicenow_incident_id}}`.
 
 ## Eastern Time Scheduling
 

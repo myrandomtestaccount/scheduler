@@ -75,6 +75,7 @@
               <option value="shifts">Shifts</option>
               <option value="systems">Coverage</option>
               <option value="timezones">Time zones</option>
+              <option value="incidents">Incidents</option>
               <option value="data">Backup</option>
             </select>
           </label>
@@ -355,6 +356,101 @@
               <select id="addTimezoneSelect"></select>
             </label>
             <button class="primary-button" type="submit">Add</button>
+          </form>
+        </section>
+
+        <section id="incidentsTab" class="tab-panel" data-lockable-admin-tab="incidents">
+          <form id="incidentConfigForm" class="card-form incident-config-form">
+            <div>
+              <p class="eyebrow">Incident configuration</p>
+              <h3>Incident creation and notifications</h3>
+              <p class="meta">Configure what happens after a user is assigned from the main queue.</p>
+            </div>
+
+            <div class="region-mode-row">
+              <span class="item-title">Enable incident creation</span>
+              <label class="toggle-switch">
+                <input id="incidentEnabledInput" type="checkbox">
+                <span class="toggle-slider" aria-hidden="true"></span>
+                <span id="incidentEnabledLabel">Yes</span>
+              </label>
+            </div>
+
+            <div id="incidentConfigFields" class="incident-config-fields">
+              <fieldset class="incident-choice-group">
+                <legend>Creation method</legend>
+                <label class="incident-choice-card">
+                  <input type="radio" name="incidentCreationMode" value="redirect">
+                  <span>
+                    <strong>Redirect to another page</strong>
+                    <small>Show the current Create incident link after assignment.</small>
+                  </span>
+                </label>
+                <label class="incident-choice-card">
+                  <input type="radio" name="incidentCreationMode" value="servicenow">
+                  <span>
+                    <strong>ServiceNow API</strong>
+                    <small>Prepare connection settings for server-side incident creation.</small>
+                  </span>
+                </label>
+              </fieldset>
+
+              <div id="incidentRedirectSettings" class="incident-settings-panel">
+                <label class="field">
+                  <span>Redirect link</span>
+                  <input id="incidentRedirectUrlInput" type="url" placeholder="https://www.google.com/">
+                </label>
+                <p class="meta">The app appends assignee and coverage query parameters to this link.</p>
+              </div>
+
+              <div id="incidentServiceNowSettings" class="incident-settings-panel">
+                <div class="two-columns">
+                  <label class="field">
+                    <span>ServiceNow instance URL</span>
+                    <input id="serviceNowInstanceUrlInput" type="url" placeholder="https://your-instance.service-now.com">
+                  </label>
+                  <label class="field">
+                    <span>Table API path</span>
+                    <input id="serviceNowApiPathInput" type="text" placeholder="/api/now/table/incident">
+                  </label>
+                </div>
+                <label class="field">
+                  <span>Short description template</span>
+                  <input id="serviceNowShortDescriptionInput" type="text" placeholder="{{coverage}} assigned to {{assignee}}">
+                </label>
+                <p class="meta">Use {{assignee}}, {{assignee_mention}}, {{coverage}}, and {{assigned_at}} placeholders. API credentials should stay server-side.</p>
+              </div>
+
+              <div class="region-mode-row">
+                <span class="item-title">Share incident on MS Teams</span>
+                <label class="toggle-switch">
+                  <input id="teamsEnabledInput" type="checkbox">
+                  <span class="toggle-slider" aria-hidden="true"></span>
+                  <span id="teamsEnabledLabel">No</span>
+                </label>
+              </div>
+
+              <div id="teamsConfigFields" class="incident-settings-panel">
+                <label class="field">
+                  <span>Teams webhook URL</span>
+                  <input id="teamsWebhookUrlInput" type="url" placeholder="https://outlook.office.com/webhook/...">
+                </label>
+                <label class="field">
+                  <span>Message format</span>
+                  <select id="teamsMessageFormatSelect">
+                    <option value="text">Text</option>
+                    <option value="html">HTML</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Message template</span>
+                  <textarea id="teamsMessageTemplateInput" rows="5" placeholder="{{assignee}} ({{assignee_mention}}), {{servicenow_incident_description}} - {{servicenow_incident_id}}"></textarea>
+                </label>
+                <p class="meta">Use {{assignee}}, {{assignee_mention}}, {{coverage}}, {{assigned_at}}, {{incident_url}}, {{servicenow_incident_description}}, and {{servicenow_incident_id}} placeholders.</p>
+              </div>
+            </div>
+
+            <button class="primary-button" type="submit">Save incident configuration</button>
           </form>
         </section>
 

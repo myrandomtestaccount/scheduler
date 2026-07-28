@@ -13,12 +13,35 @@ const TIMELINE_START_MINUTES = 6 * 60;
 const TIMELINE_END_MINUTES = 22 * 60;
 const SLOT_MINUTES = 30;
 const RECENT_ASSIGNMENTS_WINDOW_MS = 24 * 60 * 60 * 1000;
+const LONG_FUTURE_ASSIGNMENT_MINUTES = 12 * 60;
 const SHIFT_ORDER_PRESET_ID = "schedule-first";
 const SHIFT_QUEUE_SYSTEM_ID = "__shift_queue__";
 const SHIFT_QUEUE_SYSTEM_NAME = "Shift queue";
 const OTHER_QUEUE_USER_ID = "__other__";
 const OTHER_QUEUE_USER_NAME = "Other";
 const INCIDENT_CREATE_URL = "https://www.google.com/";
+const INCIDENT_CREATION_MODES = ["redirect", "servicenow"];
+const TEAMS_MESSAGE_FORMATS = ["text", "html"];
+const LEGACY_TEAMS_MESSAGE_TEMPLATE = "{{assignee}} was assigned to {{coverage}}. Incident: {{incidentUrl}}";
+const DEFAULT_TEAMS_MESSAGE_TEMPLATE = "{{assignee}} ({{assignee_mention}}), {{servicenow_incident_description}} - {{servicenow_incident_id}}";
+const DEFAULT_INCIDENT_CONFIG = {
+  enabled: true,
+  mode: "redirect",
+  redirect: {
+    url: INCIDENT_CREATE_URL
+  },
+  serviceNow: {
+    instanceUrl: "",
+    apiPath: "/api/now/table/incident",
+    shortDescriptionTemplate: "Task assigned to {{assignee}} for {{coverage}}"
+  },
+  teams: {
+    enabled: false,
+    webhookUrl: "",
+    messageFormat: "text",
+    messageTemplate: DEFAULT_TEAMS_MESSAGE_TEMPLATE
+  }
+};
 const DEV_MODE_TIME_OPTION_ID = "__dev_mode__";
 const DEFAULT_DISPLAY_TIMEZONES = [
   { id: "et", timeZone: EASTERN_TIME_ZONE, label: "Eastern (New York)" },
@@ -130,6 +153,7 @@ const defaultData = {
   shiftTemplates: DEFAULT_SHIFT_TEMPLATES,
   assignmentRules: DEFAULT_ASSIGNMENT_RULES,
   displayTimezones: DEFAULT_DISPLAY_TIMEZONES,
+  incidentConfig: DEFAULT_INCIDENT_CONFIG,
   regions: DEFAULT_REGIONS,
   delegationSlots: [],
   delegations: [],
@@ -168,7 +192,7 @@ let devModeUnlocked = initialDevModeRequested && Boolean(debugTimeOverride);
 let adminTimeInputsInitialized = false;
 let timelineDrafts = [];
 let timelineDrag = null;
-const OTHER_ADMIN_TABS = ["rules", "users", "regions", "shifts", "systems", "timezones", "data"];
+const OTHER_ADMIN_TABS = ["rules", "users", "regions", "shifts", "systems", "timezones", "incidents", "data"];
 const unlockedAdminTabs = new Set();
 let saveToastTimer = null;
 
@@ -317,6 +341,22 @@ const elements = {
   holidayDateInput: document.querySelector("#holidayDateInput"),
   holidayNameInput: document.querySelector("#holidayNameInput"),
   holidaysList: document.querySelector("#holidaysList"),
+  incidentConfigForm: document.querySelector("#incidentConfigForm"),
+  incidentEnabledInput: document.querySelector("#incidentEnabledInput"),
+  incidentEnabledLabel: document.querySelector("#incidentEnabledLabel"),
+  incidentConfigFields: document.querySelector("#incidentConfigFields"),
+  incidentRedirectUrlInput: document.querySelector("#incidentRedirectUrlInput"),
+  incidentRedirectSettings: document.querySelector("#incidentRedirectSettings"),
+  incidentServiceNowSettings: document.querySelector("#incidentServiceNowSettings"),
+  serviceNowInstanceUrlInput: document.querySelector("#serviceNowInstanceUrlInput"),
+  serviceNowApiPathInput: document.querySelector("#serviceNowApiPathInput"),
+  serviceNowShortDescriptionInput: document.querySelector("#serviceNowShortDescriptionInput"),
+  teamsEnabledInput: document.querySelector("#teamsEnabledInput"),
+  teamsEnabledLabel: document.querySelector("#teamsEnabledLabel"),
+  teamsConfigFields: document.querySelector("#teamsConfigFields"),
+  teamsWebhookUrlInput: document.querySelector("#teamsWebhookUrlInput"),
+  teamsMessageFormatSelect: document.querySelector("#teamsMessageFormatSelect"),
+  teamsMessageTemplateInput: document.querySelector("#teamsMessageTemplateInput"),
   exportButton: document.querySelector("#exportButton"),
   importInput: document.querySelector("#importInput"),
   resetButton: document.querySelector("#resetButton"),
@@ -489,6 +529,12 @@ function bindEvents() {
   on(elements.slotEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.addSystemForm, "submit", addSystem);
   on(elements.addHolidayForm, "submit", addHoliday);
+  on(elements.incidentConfigForm, "submit", saveIncidentConfig);
+  on(elements.incidentEnabledInput, "change", updateIncidentConfigControlState);
+  document.querySelectorAll("input[name='incidentCreationMode']").forEach((input) => {
+    input.addEventListener("change", updateIncidentConfigControlState);
+  });
+  on(elements.teamsEnabledInput, "change", updateIncidentConfigControlState);
   on(elements.addTimezoneForm, "submit", addTimezone);
   on(elements.shiftStartInput, "input", updateForwardTimeInputConstraints);
   on(elements.shiftEndInput, "input", updateForwardTimeInputConstraints);
@@ -652,6 +698,7 @@ function render() {
   renderUsers();
   renderSystems();
   renderHolidays();
+  renderIncidentConfig();
   renderDelegationSlots();
   renderDelegations();
   renderTimelineTools();
@@ -1439,6 +1486,11 @@ function renderAdminLocks() {
         return;
       }
 
+      if (control.closest(".incident-config-disabled, .incident-settings-disabled")) {
+        control.disabled = true;
+        return;
+      }
+
       control.disabled = !unlocked;
     });
   });
@@ -1837,10 +1889,65 @@ function renderAssignmentLog() {
 }
 
 function buildIncidentHandoffUrl(entry) {
-  const url = new URL(INCIDENT_CREATE_URL);
+  const config = getIncidentConfig();
+  const redirectUrl = config.redirect?.url || INCIDENT_CREATE_URL;
+  let url;
+  try {
+    url = new URL(redirectUrl);
+  } catch {
+    url = new URL(INCIDENT_CREATE_URL);
+  }
   url.searchParams.set("assignee", entry.userName || "");
   url.searchParams.set("coverage", entry.systemName || "");
+  url.searchParams.set("assignedAt", formatAssignmentTimestamp(entry));
   return url.toString();
+}
+
+function renderIncidentAction(entry) {
+  const config = getIncidentConfig();
+  if (!config.enabled) {
+    return "";
+  }
+
+  if (config.mode === "redirect") {
+    return `<a class="primary-button incident-action-link" href="${escapeHtml(buildIncidentHandoffUrl(entry))}">Create incident</a>`;
+  }
+
+  return "<span class=\"assignment-done-badge incident-mode-badge\">ServiceNow configured</span>";
+}
+
+function renderTeamsIncidentMessage(entry, incident = {}) {
+  const template = getIncidentConfig().teams.messageTemplate;
+  return fillIncidentTemplate(template, getIncidentTemplateVariables(entry, incident));
+}
+
+function getIncidentTemplateVariables(entry, incident = {}) {
+  const assignedAt = formatAssignmentTimestamp(entry);
+  const incidentUrl = incident.url || buildIncidentHandoffUrl(entry);
+  const variables = {
+    assignee: entry.userName || "Removed user",
+    assignee_mention: entry.userName ? `@ ${entry.userName}` : "",
+    coverage: entry.systemName || "Removed system",
+    assigned_at: assignedAt,
+    assignedAt,
+    incident_url: incidentUrl,
+    incidentUrl,
+    servicenow_incident_id: incident.serviceNowIncidentId || incident.incidentId || "",
+    servicenowIncidentId: incident.serviceNowIncidentId || incident.incidentId || ""
+  };
+
+  const descriptionTemplate = incident.serviceNowIncidentDescription
+    || incident.description
+    || getIncidentConfig().serviceNow.shortDescriptionTemplate;
+  variables.servicenow_incident_description = fillIncidentTemplate(descriptionTemplate, variables);
+  variables.servicenowIncidentDescription = variables.servicenow_incident_description;
+  return variables;
+}
+
+function fillIncidentTemplate(template, variables) {
+  return String(template || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (placeholder, key) => (
+    Object.prototype.hasOwnProperty.call(variables, key) ? variables[key] : placeholder
+  ));
 }
 
 function renderAssignmentConfirmation(hasSelectedSystem) {
@@ -1863,15 +1970,17 @@ function renderAssignmentConfirmation(hasSelectedSystem) {
 }
 
 function renderAssignmentConfirmationItem(entry) {
+  const devModeText = formatAssignmentDevModeText(entry);
+  const incidentAction = renderIncidentAction(entry);
   return `
     <div class="list-item assignment-log-item assignment-confirmation-item">
       <div>
         <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
-        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}</div>
+        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}${escapeHtml(devModeText)}</div>
       </div>
       <div class="assignment-confirmation-actions">
         <span class="assignment-done-badge">Assigned</span>
-        <a class="primary-button incident-action-link" href="${escapeHtml(buildIncidentHandoffUrl(entry))}">Create incident</a>
+        ${incidentAction}
       </div>
     </div>
   `;
@@ -1885,6 +1994,7 @@ function renderAssignmentListItem(entry, options = {}) {
   const assignedAt = formatAssignmentTimestamp(entry);
   const amendedAt = formatAmendedTimestamp(entry);
   const amendedText = amendedAt ? ` · Amended ${amendedAt}` : "";
+  const devModeText = formatAssignmentDevModeText(entry);
   const doneBadge = options.showDoneBadge
     ? "<span class=\"assignment-done-badge\">Assigned</span>"
     : "";
@@ -1900,12 +2010,16 @@ function renderAssignmentListItem(entry, options = {}) {
     <div class="list-item assignment-log-item">
       <div>
         <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
-        <div class="meta">${escapeHtml(entry.systemName || "Removed system")} · ${escapeHtml(assignedAt)}${escapeHtml(amendedText)}</div>
+        <div class="meta">${escapeHtml(entry.systemName || "Removed system")} · ${escapeHtml(assignedAt)}${escapeHtml(devModeText)}${escapeHtml(amendedText)}</div>
       </div>
       ${doneBadge}
       ${actions}
     </div>
   `;
+}
+
+function formatAssignmentDevModeText(entry) {
+  return entry?.devMode ? " · Dev mode test time" : "";
 }
 
 function renderAssignmentEditor(entry) {
@@ -1931,7 +2045,7 @@ function renderAssignmentEditor(entry) {
           <select data-edit-field="userId" required>${userOptions}</select>
         </label>
       </div>
-      <div class="assignment-edit-meta">Original time: ${escapeHtml(formatAssignmentTimestamp(entry))}</div>
+      <div class="assignment-edit-meta">Original time: ${escapeHtml(formatAssignmentTimestamp(entry))}${escapeHtml(formatAssignmentDevModeText(entry))}</div>
       <div class="item-actions assignment-edit-actions">
         <button class="primary-button" type="submit">Save</button>
         <button class="secondary-button" type="button" data-action="cancel-assignment-edit">Cancel</button>
@@ -2748,6 +2862,103 @@ function renderDataPreview() {
   }
 
   elements.dataPreview.value = JSON.stringify(data, null, 2);
+}
+
+function renderIncidentConfig() {
+  if (!elements.incidentConfigForm) {
+    return;
+  }
+
+  const config = getIncidentConfig();
+  if (elements.incidentEnabledInput) {
+    elements.incidentEnabledInput.checked = config.enabled;
+  }
+  document.querySelectorAll("input[name='incidentCreationMode']").forEach((input) => {
+    input.checked = input.value === config.mode;
+  });
+  if (elements.incidentRedirectUrlInput) {
+    elements.incidentRedirectUrlInput.value = config.redirect.url;
+  }
+  if (elements.serviceNowInstanceUrlInput) {
+    elements.serviceNowInstanceUrlInput.value = config.serviceNow.instanceUrl;
+  }
+  if (elements.serviceNowApiPathInput) {
+    elements.serviceNowApiPathInput.value = config.serviceNow.apiPath;
+  }
+  if (elements.serviceNowShortDescriptionInput) {
+    elements.serviceNowShortDescriptionInput.value = config.serviceNow.shortDescriptionTemplate;
+  }
+  if (elements.teamsEnabledInput) {
+    elements.teamsEnabledInput.checked = config.teams.enabled;
+  }
+  if (elements.teamsWebhookUrlInput) {
+    elements.teamsWebhookUrlInput.value = config.teams.webhookUrl;
+  }
+  if (elements.teamsMessageFormatSelect) {
+    elements.teamsMessageFormatSelect.value = config.teams.messageFormat;
+  }
+  if (elements.teamsMessageTemplateInput) {
+    elements.teamsMessageTemplateInput.value = config.teams.messageTemplate;
+  }
+
+  updateIncidentConfigControlState();
+}
+
+function updateIncidentConfigControlState() {
+  if (!elements.incidentConfigForm) {
+    return;
+  }
+
+  const enabled = Boolean(elements.incidentEnabledInput?.checked);
+  const mode = getSelectedIncidentCreationMode();
+  const teamsEnabled = Boolean(elements.teamsEnabledInput?.checked);
+
+  if (elements.incidentEnabledLabel) {
+    elements.incidentEnabledLabel.textContent = enabled ? "Yes" : "No";
+  }
+  if (elements.teamsEnabledLabel) {
+    elements.teamsEnabledLabel.textContent = teamsEnabled ? "Yes" : "No";
+  }
+
+  elements.incidentConfigFields?.classList.toggle("incident-config-disabled", !enabled);
+  elements.incidentRedirectSettings?.classList.toggle("incident-settings-disabled", !enabled || mode !== "redirect");
+  elements.incidentServiceNowSettings?.classList.toggle("incident-settings-disabled", !enabled || mode !== "servicenow");
+  elements.teamsConfigFields?.classList.toggle("incident-settings-disabled", !enabled || !teamsEnabled);
+  renderAdminLocks();
+}
+
+function saveIncidentConfig(event) {
+  event.preventDefault();
+  if (!isAdminTabUnlocked("incidents")) {
+    renderIncidentConfig();
+    return;
+  }
+
+  data.incidentConfig = normalizeIncidentConfig({
+    enabled: Boolean(elements.incidentEnabledInput?.checked),
+    mode: getSelectedIncidentCreationMode(),
+    redirect: {
+      url: elements.incidentRedirectUrlInput?.value || ""
+    },
+    serviceNow: {
+      instanceUrl: elements.serviceNowInstanceUrlInput?.value || "",
+      apiPath: elements.serviceNowApiPathInput?.value || "",
+      shortDescriptionTemplate: elements.serviceNowShortDescriptionInput?.value || ""
+    },
+    teams: {
+      enabled: Boolean(elements.teamsEnabledInput?.checked),
+      webhookUrl: elements.teamsWebhookUrlInput?.value || "",
+      messageFormat: elements.teamsMessageFormatSelect?.value || "",
+      messageTemplate: elements.teamsMessageTemplateInput?.value || ""
+    }
+  });
+
+  completeAdminSave("Incident configuration saved.", "incidents");
+}
+
+function getSelectedIncidentCreationMode() {
+  const selected = document.querySelector("input[name='incidentCreationMode']:checked")?.value;
+  return INCIDENT_CREATION_MODES.includes(selected) ? selected : DEFAULT_INCIDENT_CONFIG.mode;
 }
 
 function saveAssignmentRules(event) {
@@ -4408,7 +4619,7 @@ function formatHolidayDate(date) {
   return isValidDateInput(date || "") ? formatDisplayDate(date) : date || "No date";
 }
 
-function markSelectedAssigned() {
+function markSelectedAssigned(options = {}) {
   const easternNow = getEasternNow();
   const queueState = getQueueState(getAssignmentQueueSystemId(), easternNow);
   const selectedRow = queueState.rows.find((row) => row.user.id === selectedAssigneeId);
@@ -4421,9 +4632,15 @@ function markSelectedAssigned() {
     return;
   }
 
+  if (!options.skipLongWaitConfirmation && shouldConfirmLongWaitAssignment(assignmentRow)) {
+    showLongWaitAssignmentSpeedBump(assignmentRow, () => markSelectedAssigned({ skipLongWaitConfirmation: true }));
+    return;
+  }
+
   const assignmentRecord = {
     id: makeRecordId("assignment"),
     assignedAt: new Date().toISOString(),
+    devMode: isDevModeAssignmentActive(),
     easternDate: queueState.effectiveNow.date,
     easternTime: queueState.effectiveNow.date === easternNow.date
       ? easternNow.time
@@ -4443,6 +4660,23 @@ function markSelectedAssigned() {
 
   clearSelectedAssignee();
   completeDataSave("Ticket assigned.", { showToast: false });
+}
+
+function shouldConfirmLongWaitAssignment(row) {
+  return row.status === "later"
+    && Number.isFinite(row.waitMinutes)
+    && row.waitMinutes > LONG_FUTURE_ASSIGNMENT_MINUTES;
+}
+
+function showLongWaitAssignmentSpeedBump(row, onConfirm) {
+  const availableAt = `${formatDisplayDate(row.effectiveDate)} at ${formatEasternTimeForDisplay(row.effectiveDate, minutesToTime(row.availabilityStart))}`;
+  const message = `${row.user.name} is scheduled to be online in ${formatWaitDuration(row.waitMinutes)} (${availableAt}). This task can be assigned now, but they will not be online until then.`;
+  showGenericConfirm("Assign future task?", message, onConfirm, {
+    cancelLabel: "Choose someone else",
+    confirmLabel: "Assign task anyway",
+    confirmClass: "primary-button",
+    variant: "assignment-speed-bump"
+  });
 }
 
 function getQueueState(systemId, easternNow) {
@@ -4480,14 +4714,33 @@ function getGlobalRosterRows(easternNow, effectiveNow, excludedUserIds = []) {
     .map((user) => (
       buildQueueUserRow(user, easternNow, effectiveNow, -1, Number.POSITIVE_INFINITY, true)
     ))
-    .sort(compareQueueRows);
+    .sort(compareOtherRosterRows);
 }
 
 function buildQueueUserRow(user, easternNow, effectiveNow, systemPriority, queuePriority, isCoverageMember) {
-  const status = getUserStatus(user, effectiveNow);
+  const status = getEffectiveQueueUserStatus(user, easternNow, effectiveNow);
   const waitMinutes = getAvailabilityWaitMinutes(easternNow, effectiveNow, status);
   const metrics = getAssignmentMetrics(user, systemPriority, queuePriority, effectiveNow, status, waitMinutes);
   return { user, isCoverageMember, effectiveDate: effectiveNow.date, effectiveDay: effectiveNow.day, ...status, ...metrics };
+}
+
+function getEffectiveQueueUserStatus(user, easternNow, effectiveNow) {
+  const status = getUserStatus(user, effectiveNow);
+  if (status.status !== "available" || !isFutureQueueTime(easternNow, effectiveNow)) {
+    return status;
+  }
+
+  return {
+    ...status,
+    status: "later",
+    badge: "Later",
+    message: "Scheduled for future availability. You can pick them anyway."
+  };
+}
+
+function isFutureQueueTime(referenceNow, effectiveNow) {
+  const dayOffset = getDateOffset(referenceNow.date, effectiveNow.date);
+  return dayOffset > 0 || (dayOffset === 0 && effectiveNow.minutes > referenceNow.minutes);
 }
 
 function getOtherQueueRow(otherRows, effectiveNow, selectedOtherUserId = null) {
@@ -4566,6 +4819,27 @@ function compareQueueRows(left, right) {
   return left.user.name.localeCompare(right.user.name);
 }
 
+function compareOtherRosterRows(left, right) {
+  const statusDifference = getQueueStatusRank(left) - getQueueStatusRank(right);
+  if (statusDifference !== 0) {
+    return statusDifference;
+  }
+
+  if (left.status === "available" && right.status === "available") {
+    const teamDifference = compareFiniteNumbers(left.teamPriority, right.teamPriority);
+    return teamDifference || left.user.name.localeCompare(right.user.name);
+  }
+
+  if (left.status === "later" && right.status === "later") {
+    const scheduleDifference = compareFiniteNumbers(left.scheduleStart, right.scheduleStart);
+    const teamDifference = compareFiniteNumbers(left.teamPriority, right.teamPriority);
+    return scheduleDifference || teamDifference || left.user.name.localeCompare(right.user.name);
+  }
+
+  const teamDifference = compareFiniteNumbers(left.teamPriority, right.teamPriority);
+  return teamDifference || left.user.name.localeCompare(right.user.name);
+}
+
 function compareQueueRowsByRule(left, right, rule) {
   if (rule === "schedule") {
     return compareFiniteNumbers(left.scheduleStart, right.scheduleStart);
@@ -4631,30 +4905,37 @@ function getEffectiveQueueNow(easternNow) {
 
   for (let offset = 1; offset <= 21; offset += 1) {
     const date = formatDate(addDays(parseDate(easternNow.date), offset));
-    if (!isBusinessDay(date)) {
-      continue;
-    }
-
-    const candidateNow = buildEasternNow(date, "00:00");
-    if (data.users.some((user) => getUserStatus(user, candidateNow).selectable)) {
-      return candidateNow;
+    const nextStart = getEarliestQueueAvailabilityStart(date);
+    if (nextStart !== null) {
+      const candidateNow = buildEasternNow(date, minutesToTime(nextStart));
+      if (data.users.some((user) => getUserStatus(user, candidateNow).selectable)) {
+        return candidateNow;
+      }
     }
   }
 
   return easternNow;
 }
 
-function getAvailabilityWaitMinutes(referenceNow, effectiveNow, status) {
-  if (status.status === "available") {
-    return 0;
-  }
+function getEarliestQueueAvailabilityStart(date) {
+  const day = getDayNameFromDate(date);
+  const starts = data.users.flatMap((user) => (
+    getScheduleWindowsForDate(user, date, day)
+      .map((window) => toMinutes(window.start))
+      .filter((start) => Number.isFinite(start))
+  ));
 
+  return starts.length > 0 ? Math.min(...starts) : null;
+}
+
+function getAvailabilityWaitMinutes(referenceNow, effectiveNow, status) {
   if (!Number.isFinite(status.availabilityStart)) {
     return Number.POSITIVE_INFINITY;
   }
 
   const dayOffset = getDateOffset(referenceNow.date, effectiveNow.date);
-  return Math.max(0, dayOffset * 24 * 60 + status.availabilityStart - referenceNow.minutes);
+  const minutesUntilAvailable = dayOffset * 24 * 60 + status.availabilityStart - referenceNow.minutes;
+  return Math.max(0, minutesUntilAvailable);
 }
 
 function getDateOffset(startDate, endDate) {
@@ -5238,7 +5519,7 @@ function closeGenericAlert() {
   elements.genericAlertModal.setAttribute("aria-hidden", "true");
 }
 
-function showGenericConfirm(title, message, onConfirm) {
+function showGenericConfirm(title, message, onConfirm, options = {}) {
   if (!elements.genericConfirmModal) {
     if (window.confirm(`${title}\n\n${message}`)) {
       onConfirm();
@@ -5253,7 +5534,15 @@ function showGenericConfirm(title, message, onConfirm) {
   if (elements.genericConfirmModalMessage) {
     elements.genericConfirmModalMessage.textContent = message;
   }
+  if (elements.cancelGenericConfirmButton) {
+    elements.cancelGenericConfirmButton.textContent = options.cancelLabel || "Cancel";
+  }
+  if (elements.confirmGenericConfirmButton) {
+    elements.confirmGenericConfirmButton.textContent = options.confirmLabel || "Confirm";
+    elements.confirmGenericConfirmButton.className = options.confirmClass || "danger-button";
+  }
 
+  elements.genericConfirmModal.classList.toggle("assignment-speed-bump", options.variant === "assignment-speed-bump");
   elements.genericConfirmModal.classList.remove("hidden");
   elements.genericConfirmModal.setAttribute("aria-hidden", "false");
   window.setTimeout(() => elements.cancelGenericConfirmButton?.focus(), 0);
@@ -5267,6 +5556,7 @@ function closeGenericConfirm() {
 
   elements.genericConfirmModal.classList.add("hidden");
   elements.genericConfirmModal.setAttribute("aria-hidden", "true");
+  elements.genericConfirmModal.classList.remove("assignment-speed-bump");
 }
 
 function confirmGenericConfirm() {
@@ -5384,6 +5674,10 @@ function clearDebugTimeOverride() {
   localStorage.removeItem(DEBUG_TIME_STORAGE_KEY);
 }
 
+function isDevModeAssignmentActive() {
+  return devModeUnlocked && Boolean(debugTimeOverride);
+}
+
 function saveData(snapshot = data) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
 }
@@ -5406,12 +5700,50 @@ function validateData(candidate) {
   });
 }
 
+function getIncidentConfig() {
+  return normalizeIncidentConfig(data?.incidentConfig);
+}
+
+function normalizeIncidentConfig(config) {
+  const source = config && typeof config === "object" ? config : {};
+  const redirect = source.redirect && typeof source.redirect === "object" ? source.redirect : {};
+  const serviceNow = source.serviceNow && typeof source.serviceNow === "object" ? source.serviceNow : {};
+  const teams = source.teams && typeof source.teams === "object" ? source.teams : {};
+  const mode = INCIDENT_CREATION_MODES.includes(source.mode) ? source.mode : DEFAULT_INCIDENT_CONFIG.mode;
+  const teamsMessageFormat = TEAMS_MESSAGE_FORMATS.includes(teams.messageFormat)
+    ? teams.messageFormat
+    : DEFAULT_INCIDENT_CONFIG.teams.messageFormat;
+  const messageTemplate = String(teams.messageTemplate || DEFAULT_INCIDENT_CONFIG.teams.messageTemplate).trim();
+
+  return {
+    enabled: source.enabled !== false,
+    mode,
+    redirect: {
+      url: String(redirect.url || DEFAULT_INCIDENT_CONFIG.redirect.url).trim()
+    },
+    serviceNow: {
+      instanceUrl: String(serviceNow.instanceUrl || "").trim(),
+      apiPath: String(serviceNow.apiPath || DEFAULT_INCIDENT_CONFIG.serviceNow.apiPath).trim(),
+      shortDescriptionTemplate: String(serviceNow.shortDescriptionTemplate || DEFAULT_INCIDENT_CONFIG.serviceNow.shortDescriptionTemplate).trim()
+    },
+    teams: {
+      enabled: teams.enabled === true,
+      webhookUrl: String(teams.webhookUrl || "").trim(),
+      messageFormat: teamsMessageFormat,
+      messageTemplate: messageTemplate === LEGACY_TEAMS_MESSAGE_TEMPLATE
+        ? DEFAULT_INCIDENT_CONFIG.teams.messageTemplate
+        : messageTemplate
+    }
+  };
+}
+
 function normalizeData() {
   data.assignmentLog = Array.isArray(data.assignmentLog) ? data.assignmentLog : [];
   data.assignmentRules = data.assignmentRules && typeof data.assignmentRules === "object"
     ? data.assignmentRules
     : { ...DEFAULT_ASSIGNMENT_RULES };
   data.assignmentRules.preset = getAssignmentRulePreset(data.assignmentRules.preset).id;
+  data.incidentConfig = normalizeIncidentConfig(data.incidentConfig);
   data.exceptions = Array.isArray(data.exceptions) ? data.exceptions : [];
   data.holidays = Array.isArray(data.holidays) ? data.holidays : [];
   data.regionsEnabled = data.regionsEnabled !== false;
@@ -6165,6 +6497,21 @@ function formatWaitDuration(totalMinutes) {
 
   if (minutesUntilAvailable < 60) {
     return `${minutesUntilAvailable} min${minutesUntilAvailable === 1 ? "" : "s"}`;
+  }
+
+  if (minutesUntilAvailable >= 24 * 60) {
+    const days = Math.floor(minutesUntilAvailable / (24 * 60));
+    const remainingMinutes = minutesUntilAvailable % (24 * 60);
+    const hours = Math.floor(remainingMinutes / 60);
+    const minutes = remainingMinutes % 60;
+    const parts = [`${days} day${days === 1 ? "" : "s"}`];
+    if (hours > 0) {
+      parts.push(`${hours}hr${hours === 1 ? "" : "s"}`);
+    }
+    if (minutes > 0) {
+      parts.push(`${minutes} min${minutes === 1 ? "" : "s"}`);
+    }
+    return parts.join(" ");
   }
 
   const hours = Math.floor(minutesUntilAvailable / 60);
