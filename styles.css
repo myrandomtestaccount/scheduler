@@ -252,12 +252,12 @@ button:disabled {
 .time-zone-card {
   align-items: center;
   display: inline-flex;
-  flex: 0 1 26rem;
+  flex: 0 1 15.5rem;
   justify-content: center;
   max-width: 100%;
-  min-width: 18rem;
+  min-width: 13.5rem;
   min-height: 2.9rem;
-  width: clamp(18rem, 34vw, 26rem);
+  width: clamp(13.5rem, 20vw, 15.5rem);
 }
 
 .time-zone-select {
