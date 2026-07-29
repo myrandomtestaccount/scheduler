@@ -87,6 +87,7 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 - Region list: admins can create and remove region labels such as Americas, EMEA, and APAC.
 - User-region mapping: users can belong to one or more regions.
 - Coverage management: admins can add and remove systems/apps.
+- Coverage config item: when ServiceNow incident mode is enabled, each coverage can store the ServiceNow configuration item used for that queue.
 - SME mapping: admins can assign users to each system/app.
 - SME priority order: admins can reorder coverage SMEs with move-up and move-down controls.
 - Assignment rules: admins can select the queue recommendation policy used by the main page.
@@ -107,10 +108,14 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 
 - Enable incident creation: admins can turn incident behavior on or off.
 - Redirect mode: after assignment, the browser redirects to the exact configured URL.
-- ServiceNow mode: stores future ServiceNow API settings, including instance URL, API path, and short-description template.
+- ServiceNow mode: stores future ServiceNow API settings and prompts for incident details after assignment.
+- ServiceNow incident form: asks for description and priority; the config item comes from the selected coverage queue.
+- ServiceNow field mapping: saved payloads use the description for both `description` and `short_description`; priority also sets `severity` to the same numeric value.
+- Coverage config item mapping: each selected coverage queue contributes its configured ServiceNow item to the saved payload as `cmdb_ci`.
+- Hidden ServiceNow values: admins can define additional field/value pairs, such as `assignment_group` or `category`, that are added to every ServiceNow payload but never shown on the assignment form.
 - Teams settings: stores future Teams webhook configuration, message format, and message template.
 - Template placeholders: incident templates support `{{assignee}}`, `{{assignee_mention}}`, `{{coverage}}`, `{{assigned_at}}`, `{{incident_url}}`, `{{servicenow_incident_description}}`, and `{{servicenow_incident_id}}`.
-- Integration readiness: ServiceNow and Teams settings are saved for future integration; the current app does not call ServiceNow or send Teams webhooks.
+- Integration readiness: ServiceNow payloads and Teams settings are saved for future integration; the current app does not call ServiceNow or send Teams webhooks.
 
 ### Admin Safety and UI
 
@@ -163,7 +168,7 @@ Admin sections:
 - `Delegation`: define predefined coverage time slots, assign only scheduled delegators or leave a slot/date unassigned, and review the day/week graph.
 - `Assignment rules`: choose how recommendations are sorted. The default is schedule-first.
 - `Shift presets`: define reusable shift names and times.
-- `Systems / apps`: add systems and assign/reorder primary SMEs.
+- `Systems / apps`: add systems, define ServiceNow config items when ServiceNow mode is enabled, and assign/reorder primary SMEs.
 - `Incidents`: turn incident creation on/off, configure post-assignment redirects, and prepare ServiceNow or Teams settings.
 - `Holidays`: add user-specific or all-team holidays.
 - `Data`: export/import JSON backups.

@@ -317,14 +317,15 @@
         </section>
 
         <section id="systemsTab" class="tab-panel" data-lockable-admin-tab="systems">
-          <form id="addSystemForm" class="inline-form">
+          <form id="addSystemForm" class="inline-form system-add-form">
             <label class="field">
               <span>System / app name</span>
               <input id="systemNameInput" type="text" required>
             </label>
             <button class="primary-button" type="submit">Add system</button>
           </form>
-          <div id="systemsList" class="stack-list"></div>
+          <div class="systems-list-heading">Existing systems</div>
+          <div id="systemsList" class="stack-list systems-list"></div>
         </section>
 
         <section id="holidaysTab" class="tab-panel" data-lockable-admin-tab="holidays">
@@ -391,7 +392,7 @@
                   <input type="radio" name="incidentCreationMode" value="servicenow">
                   <span>
                     <strong>ServiceNow API</strong>
-                    <small>Prepare connection settings for server-side incident creation.</small>
+                    <small>Collect incident details after assignment and prepare server-side creation.</small>
                   </span>
                 </label>
               </fieldset>
@@ -416,10 +417,28 @@
                   </label>
                 </div>
                 <label class="field">
-                  <span>Short description template</span>
+                  <span>Default description template</span>
                   <input id="serviceNowShortDescriptionInput" type="text" placeholder="{{coverage}} assigned to {{assignee}}">
                 </label>
-                <p class="meta">Use {{assignee}}, {{assignee_mention}}, {{coverage}}, and {{assigned_at}} placeholders. API credentials should stay server-side.</p>
+                <p class="meta">Use {{assignee}}, {{assignee_mention}}, {{coverage}}, and {{assigned_at}} placeholders for the internal default. API credentials should stay server-side.</p>
+                <div class="service-now-hidden-fields">
+                  <div>
+                    <span class="item-title">Hidden API values</span>
+                    <p class="meta">These values are added to every ServiceNow payload and are not shown on the assignment form. The form controls description and priority; coverage settings control cmdb_ci.</p>
+                  </div>
+                  <div class="service-now-hidden-field-form">
+                    <label class="field">
+                      <span>ServiceNow field</span>
+                      <input id="serviceNowHiddenFieldNameInput" type="text" placeholder="assignment_group">
+                    </label>
+                    <label class="field">
+                      <span>Value</span>
+                      <input id="serviceNowHiddenFieldValueInput" type="text" placeholder="Network Support">
+                    </label>
+                    <button id="addServiceNowHiddenFieldButton" class="secondary-button" type="button">Add value</button>
+                  </div>
+                  <div id="serviceNowHiddenFieldsList" class="service-now-hidden-fields-list"></div>
+                </div>
               </div>
 
               <div class="region-mode-row">

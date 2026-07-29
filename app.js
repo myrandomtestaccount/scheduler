@@ -21,6 +21,10 @@ const OTHER_QUEUE_USER_ID = "__other__";
 const OTHER_QUEUE_USER_NAME = "Other";
 const INCIDENT_CREATE_URL = "https://www.google.com/";
 const INCIDENT_CREATION_MODES = ["redirect", "servicenow"];
+const SERVICENOW_PRIORITIES = ["1", "2", "3", "4"];
+const DEFAULT_SERVICENOW_PRIORITY = "3";
+const SERVICENOW_FORM_CONTROLLED_FIELDS = ["short_description", "description", "cmdb_ci", "priority", "severity"];
+const SERVICENOW_FIELD_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_.-]*$/;
 const TEAMS_MESSAGE_FORMATS = ["text", "html"];
 const LEGACY_TEAMS_MESSAGE_TEMPLATE = "{{assignee}} was assigned to {{coverage}}. Incident: {{incidentUrl}}";
 const DEFAULT_TEAMS_MESSAGE_TEMPLATE = "{{assignee}} ({{assignee_mention}}), {{servicenow_incident_description}} - {{servicenow_incident_id}}";
@@ -33,7 +37,8 @@ const DEFAULT_INCIDENT_CONFIG = {
   serviceNow: {
     instanceUrl: "",
     apiPath: "/api/now/table/incident",
-    shortDescriptionTemplate: "Task assigned to {{assignee}} for {{coverage}}"
+    shortDescriptionTemplate: "Task assigned to {{assignee}} for {{coverage}}",
+    hiddenFields: []
   },
   teams: {
     enabled: false,
@@ -143,8 +148,8 @@ const defaultData = {
     }
   ],
   systems: [
-    { id: "external-system", name: "External System", primaryUserIds: ["alice", "ben", "casey"] },
-    { id: "internal-api", name: "Internal API", primaryUserIds: ["casey", "alice"] }
+    { id: "external-system", name: "External System", primaryUserIds: ["alice", "ben", "casey"], serviceNowConfigItem: "External System" },
+    { id: "internal-api", name: "Internal API", primaryUserIds: ["casey", "alice"], serviceNowConfigItem: "Internal API" }
   ],
   queues: {
     "external-system": 0,
@@ -180,6 +185,7 @@ let showRecentAssignments = false;
 let showQueueDashboard = false;
 let lastAssignmentId = null;
 let editingAssignmentId = null;
+let pendingServiceNowAssignmentId = null;
 let editingSchedule = null;
 let selectedAssignmentPolicyId = null;
 let pendingRemoveUserId = null;
@@ -245,6 +251,12 @@ const elements = {
   assignmentSystemSelect: document.querySelector("#assignmentSystemSelect"),
   markAssignedButton: document.querySelector("#markAssignedButton"),
   assignmentConfirmation: document.querySelector("#assignmentConfirmation"),
+  serviceNowIncidentModal: document.querySelector("#serviceNowIncidentModal"),
+  serviceNowIncidentForm: document.querySelector("#serviceNowIncidentForm"),
+  serviceNowDescriptionInput: document.querySelector("#serviceNowDescriptionInput"),
+  serviceNowConfigItemInput: document.querySelector("#serviceNowConfigItemInput"),
+  serviceNowPrioritySelect: document.querySelector("#serviceNowPrioritySelect"),
+  cancelServiceNowIncidentButton: document.querySelector("#cancelServiceNowIncidentButton"),
   queueSection: document.querySelector("#queueSection"),
   queueList: document.querySelector("#queueList"),
   otherAssigneePicker: document.querySelector("#otherAssigneePicker"),
@@ -351,6 +363,10 @@ const elements = {
   serviceNowInstanceUrlInput: document.querySelector("#serviceNowInstanceUrlInput"),
   serviceNowApiPathInput: document.querySelector("#serviceNowApiPathInput"),
   serviceNowShortDescriptionInput: document.querySelector("#serviceNowShortDescriptionInput"),
+  serviceNowHiddenFieldNameInput: document.querySelector("#serviceNowHiddenFieldNameInput"),
+  serviceNowHiddenFieldValueInput: document.querySelector("#serviceNowHiddenFieldValueInput"),
+  addServiceNowHiddenFieldButton: document.querySelector("#addServiceNowHiddenFieldButton"),
+  serviceNowHiddenFieldsList: document.querySelector("#serviceNowHiddenFieldsList"),
   teamsEnabledInput: document.querySelector("#teamsEnabledInput"),
   teamsEnabledLabel: document.querySelector("#teamsEnabledLabel"),
   teamsConfigFields: document.querySelector("#teamsConfigFields"),
@@ -434,6 +450,13 @@ function bindEvents() {
     }
   });
   on(elements.markAssignedButton, "click", markSelectedAssigned);
+  on(elements.serviceNowIncidentForm, "submit", saveServiceNowIncidentDetails);
+  on(elements.cancelServiceNowIncidentButton, "click", closeServiceNowIncidentModal);
+  on(elements.serviceNowIncidentModal, "click", (event) => {
+    if (event.target === elements.serviceNowIncidentModal) {
+      closeServiceNowIncidentModal();
+    }
+  });
   on(elements.otherAssigneeSelect, "change", () => {
     selectedOtherAssigneeId = elements.otherAssigneeSelect.value || null;
     renderClockAndAssignment();
@@ -531,6 +554,7 @@ function bindEvents() {
   on(elements.addHolidayForm, "submit", addHoliday);
   on(elements.incidentConfigForm, "submit", saveIncidentConfig);
   on(elements.incidentEnabledInput, "change", updateIncidentConfigControlState);
+  on(elements.addServiceNowHiddenFieldButton, "click", addServiceNowHiddenField);
   document.querySelectorAll("input[name='incidentCreationMode']").forEach((input) => {
     input.addEventListener("change", updateIncidentConfigControlState);
   });
@@ -593,6 +617,9 @@ function handleGlobalKeydown(event) {
   }
   if (event.key === "Escape" && elements.syncStateModal && !elements.syncStateModal.classList.contains("hidden")) {
     closeSyncStateModal();
+  }
+  if (event.key === "Escape" && elements.serviceNowIncidentModal && !elements.serviceNowIncidentModal.classList.contains("hidden")) {
+    closeServiceNowIncidentModal();
   }
   if (event.key === "Escape" && elements.genericAlertModal && !elements.genericAlertModal.classList.contains("hidden")) {
     closeGenericAlert();
@@ -1889,6 +1916,7 @@ function renderAssignmentLog() {
 
   elements.assignmentLog.innerHTML = rows || emptyState("No assignments in the last 24 hours.");
   bindAssignmentLogActions();
+  bindIncidentActionButtons(elements.assignmentLog);
 }
 
 function buildIncidentHandoffUrl(entry) {
@@ -1912,7 +1940,14 @@ function renderIncidentAction(entry) {
     return "";
   }
 
-  return "<span class=\"assignment-done-badge incident-mode-badge\">ServiceNow configured</span>";
+  if (entry.serviceNowIncident?.payload) {
+    return `
+      <span class="assignment-done-badge incident-mode-badge">ServiceNow details ready</span>
+      <button class="small-button incident-detail-button" type="button" data-action="open-servicenow-incident-form" data-assignment-id="${escapeHtml(entry.id)}">Edit incident</button>
+    `;
+  }
+
+  return `<button class="primary-button incident-action-link" type="button" data-action="open-servicenow-incident-form" data-assignment-id="${escapeHtml(entry.id)}">Add incident details</button>`;
 }
 
 function renderTeamsIncidentMessage(entry, incident = {}) {
@@ -1949,6 +1984,151 @@ function fillIncidentTemplate(template, variables) {
   ));
 }
 
+function bindIncidentActionButtons(container) {
+  container?.querySelectorAll("[data-action='open-servicenow-incident-form']").forEach((button) => {
+    button.addEventListener("click", () => openServiceNowIncidentModal(button.dataset.assignmentId));
+  });
+}
+
+function openServiceNowIncidentModal(assignmentId) {
+  const entry = data.assignmentLog.find((assignment) => assignment.id === assignmentId);
+  if (!entry || !elements.serviceNowIncidentModal || !elements.serviceNowIncidentForm) {
+    return;
+  }
+
+  pendingServiceNowAssignmentId = entry.id;
+  const existingIncident = entry.serviceNowIncident || {};
+  const existingPayload = existingIncident.payload || {};
+  const description = existingIncident.description
+    || existingIncident.serviceNowIncidentDescription
+    || existingPayload.description
+    || existingPayload.short_description
+    || "";
+  const configItem = existingIncident.configItem
+    || existingIncident.configurationItem
+    || existingPayload.cmdb_ci
+    || getServiceNowConfigItemForAssignment(entry)
+    || "";
+  const priority = normalizeServiceNowPriority(existingIncident.priority || existingPayload.priority);
+
+  if (elements.serviceNowDescriptionInput) {
+    elements.serviceNowDescriptionInput.value = description;
+    elements.serviceNowDescriptionInput.placeholder = getServiceNowDescriptionPlaceholder(entry);
+  }
+  if (elements.serviceNowConfigItemInput) {
+    elements.serviceNowConfigItemInput.value = configItem;
+  }
+  if (elements.serviceNowPrioritySelect) {
+    elements.serviceNowPrioritySelect.value = priority;
+  }
+
+  elements.serviceNowIncidentModal.classList.remove("hidden");
+  elements.serviceNowIncidentModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => elements.serviceNowDescriptionInput?.focus(), 0);
+}
+
+function closeServiceNowIncidentModal() {
+  pendingServiceNowAssignmentId = null;
+  elements.serviceNowIncidentModal?.classList.add("hidden");
+  elements.serviceNowIncidentModal?.setAttribute("aria-hidden", "true");
+}
+
+function saveServiceNowIncidentDetails(event) {
+  event.preventDefault();
+  const entry = data.assignmentLog.find((assignment) => assignment.id === pendingServiceNowAssignmentId);
+  if (!entry) {
+    closeServiceNowIncidentModal();
+    return;
+  }
+
+  const details = getServiceNowIncidentFormDetails();
+  if (!details.description) {
+    showGenericAlert("Missing incident description", "Add a description before saving the ServiceNow incident details.");
+    return;
+  }
+  if (!details.configItem) {
+    showGenericAlert("Missing coverage config item", "Add a ServiceNow config item for this coverage in Admin → Systems / apps before saving incident details.");
+    return;
+  }
+
+  const hiddenFields = getServiceNowHiddenPayloadFields();
+  entry.serviceNowIncident = {
+    mode: "servicenow",
+    status: "ready",
+    preparedAt: new Date().toISOString(),
+    description: details.description,
+    serviceNowIncidentDescription: details.description,
+    configItem: details.configItem,
+    priority: details.priority,
+    severity: details.priority,
+    hiddenFields,
+    payload: buildServiceNowIncidentPayload(details, hiddenFields)
+  };
+
+  closeServiceNowIncidentModal();
+  lastAssignmentId = entry.id;
+  completeDataSave("ServiceNow incident details saved.", { showToast: true });
+}
+
+function getServiceNowIncidentFormDetails() {
+  const priority = normalizeServiceNowPriority(elements.serviceNowPrioritySelect?.value);
+  return {
+    description: String(elements.serviceNowDescriptionInput?.value || "").trim(),
+    configItem: String(elements.serviceNowConfigItemInput?.value || "").trim(),
+    priority
+  };
+}
+
+function getServiceNowDescriptionPlaceholder(entry) {
+  return `Give a description to the incident that will be assigned to ${entry.userName || "the assignee"} for ${entry.systemName || "the selected coverage"}.`;
+}
+
+function getServiceNowConfigItemForAssignment(entry) {
+  const assignmentConfigItem = String(entry?.serviceNowConfigItem || "").trim();
+  if (assignmentConfigItem) {
+    return assignmentConfigItem;
+  }
+
+  const systemConfigItem = String(getAssignmentSystemById(entry?.systemId)?.serviceNowConfigItem || "").trim();
+  return systemConfigItem;
+}
+
+function buildServiceNowIncidentPayload(details = {}, hiddenFields = getServiceNowHiddenPayloadFields()) {
+  const description = String(details.description || "").trim();
+  const configItem = String(details.configItem || details.configurationItem || "").trim();
+  const priority = normalizeServiceNowPriority(details.priority);
+  return {
+    ...normalizeServiceNowHiddenPayloadFields(hiddenFields),
+    short_description: description,
+    description,
+    cmdb_ci: configItem,
+    priority,
+    severity: priority
+  };
+}
+
+function normalizeServiceNowHiddenPayloadFields(fields) {
+  if (Array.isArray(fields)) {
+    return getServiceNowHiddenPayloadFields(fields);
+  }
+
+  return Object.entries(fields && typeof fields === "object" ? fields : {})
+    .filter(([name, value]) => (
+      SERVICENOW_FIELD_NAME_PATTERN.test(name)
+        && !SERVICENOW_FORM_CONTROLLED_FIELDS.includes(name)
+        && String(value ?? "").trim()
+    ))
+    .reduce((payloadFields, [name, value]) => {
+      payloadFields[name] = String(value).trim();
+      return payloadFields;
+    }, {});
+}
+
+function normalizeServiceNowPriority(priority) {
+  const value = String(priority || "").replace(/^p/i, "");
+  return SERVICENOW_PRIORITIES.includes(value) ? value : DEFAULT_SERVICENOW_PRIORITY;
+}
+
 function renderAssignmentConfirmation(hasSelectedSystem) {
   if (!elements.assignmentConfirmation) {
     return;
@@ -1966,6 +2146,7 @@ function renderAssignmentConfirmation(hasSelectedSystem) {
 
   elements.assignmentConfirmation.classList.remove("hidden");
   elements.assignmentConfirmation.innerHTML = renderAssignmentConfirmationItem(entry);
+  bindIncidentActionButtons(elements.assignmentConfirmation);
 }
 
 function renderAssignmentConfirmationItem(entry) {
@@ -1997,9 +2178,11 @@ function renderAssignmentListItem(entry, options = {}) {
   const doneBadge = options.showDoneBadge
     ? "<span class=\"assignment-done-badge\">Assigned</span>"
     : "";
+  const incidentAction = options.allowActions ? renderIncidentAction(entry) : "";
   const actions = options.allowActions
     ? `
       <div class="item-actions">
+        ${incidentAction}
         <button class="small-button" type="button" data-action="edit-assignment" data-assignment-id="${escapeHtml(entry.id)}">Edit</button>
         <button class="remove-button" type="button" data-action="delete-assignment" data-assignment-id="${escapeHtml(entry.id)}">Delete</button>
       </div>
@@ -2526,11 +2709,17 @@ function renderSlots() {
   });
 }
 
+function shouldShowServiceNowCoverageConfigItems() {
+  const config = getIncidentConfig();
+  return config.enabled && config.mode === "servicenow";
+}
+
 function renderSystems() {
   if (!elements.systemsList) {
     return;
   }
 
+  const showServiceNowConfigItems = shouldShowServiceNowCoverageConfigItems();
   const rows = data.systems.map((system) => {
     const assignedRows = system.primaryUserIds.map((userId, index) => {
       const user = data.users.find((item) => item.id === userId);
@@ -2560,6 +2749,17 @@ function renderSystems() {
         <span>${escapeHtml(user.name)}</span>
       </label>
     `).join("");
+    const serviceNowConfigItemSection = showServiceNowConfigItems
+      ? `
+        <div class="coverage-section">
+          <label class="field coverage-config-item-field">
+            <span>ServiceNow config item</span>
+            <input type="text" value="${escapeHtml(system.serviceNowConfigItem || "")}" data-action="update-system-servicenow-config-item" data-system-id="${escapeHtml(system.id)}" placeholder="${escapeHtml(system.name)}">
+            <span class="meta">Sent as cmdb_ci when ServiceNow incident creation is enabled.</span>
+          </label>
+        </div>
+      `
+      : "";
 
     return `
       <article class="system-card">
@@ -2569,6 +2769,7 @@ function renderSystems() {
           </div>
           <button class="remove-button subtle-danger" type="button" data-action="remove-system" data-system-id="${escapeHtml(system.id)}">Remove</button>
         </div>
+        ${serviceNowConfigItemSection}
         <div class="coverage-section">
           <div class="coverage-section-label">Team</div>
           <div class="coverage-grid">${coverageRows || emptyState("Add users first.")}</div>
@@ -2593,6 +2794,9 @@ function renderSystems() {
   });
   elements.systemsList.querySelectorAll("[data-action='remove-system']").forEach((button) => {
     button.addEventListener("click", () => removeSystem(button.dataset.systemId));
+  });
+  elements.systemsList.querySelectorAll("[data-action='update-system-servicenow-config-item']").forEach((input) => {
+    input.addEventListener("change", () => updateSystemServiceNowConfigItem(input.dataset.systemId, input.value));
   });
 }
 
@@ -2898,6 +3102,7 @@ function renderIncidentConfig() {
   if (elements.serviceNowShortDescriptionInput) {
     elements.serviceNowShortDescriptionInput.value = config.serviceNow.shortDescriptionTemplate;
   }
+  renderServiceNowHiddenFields(config.serviceNow.hiddenFields);
   if (elements.teamsEnabledInput) {
     elements.teamsEnabledInput.checked = config.teams.enabled;
   }
@@ -2912,6 +3117,100 @@ function renderIncidentConfig() {
   }
 
   updateIncidentConfigControlState();
+}
+
+function renderServiceNowHiddenFields(fields = []) {
+  if (!elements.serviceNowHiddenFieldsList) {
+    return;
+  }
+
+  const normalizedFields = normalizeServiceNowHiddenFields(fields);
+  elements.serviceNowHiddenFieldsList.innerHTML = normalizedFields.length > 0
+    ? normalizedFields.map((field) => `
+      <div class="service-now-hidden-field-row" data-service-now-hidden-field-row data-field-id="${escapeHtml(field.id)}">
+        <input type="hidden" data-service-now-hidden-field-name value="${escapeHtml(field.name)}">
+        <input type="hidden" data-service-now-hidden-field-value value="${escapeHtml(field.value)}">
+        <div class="service-now-hidden-field-copy">
+          <code>${escapeHtml(field.name)}</code>
+          <span>${escapeHtml(field.value)}</span>
+        </div>
+        <button class="remove-button" type="button" data-action="remove-service-now-hidden-field">Remove</button>
+      </div>
+    `).join("")
+    : emptyState("No hidden ServiceNow values yet.");
+
+  bindServiceNowHiddenFieldActions();
+  renderAdminLocks();
+}
+
+function bindServiceNowHiddenFieldActions() {
+  elements.serviceNowHiddenFieldsList?.querySelectorAll("[data-action='remove-service-now-hidden-field']").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!isAdminTabUnlocked("incidents")) {
+        return;
+      }
+      button.closest("[data-service-now-hidden-field-row]")?.remove();
+      renderAdminLocks();
+    });
+  });
+}
+
+function addServiceNowHiddenField() {
+  if (!isAdminTabUnlocked("incidents")) {
+    return;
+  }
+
+  const name = String(elements.serviceNowHiddenFieldNameInput?.value || "").trim();
+  const value = String(elements.serviceNowHiddenFieldValueInput?.value || "").trim();
+  const currentFields = getServiceNowHiddenFieldsFromForm();
+  const validationMessage = getServiceNowHiddenFieldValidationMessage(name, value, currentFields);
+  if (validationMessage) {
+    showGenericAlert("Invalid ServiceNow value", validationMessage);
+    return;
+  }
+
+  renderServiceNowHiddenFields(currentFields.concat({
+    id: makeRecordId("servicenow-field"),
+    name,
+    value
+  }));
+
+  if (elements.serviceNowHiddenFieldNameInput) {
+    elements.serviceNowHiddenFieldNameInput.value = "";
+    elements.serviceNowHiddenFieldNameInput.focus();
+  }
+  if (elements.serviceNowHiddenFieldValueInput) {
+    elements.serviceNowHiddenFieldValueInput.value = "";
+  }
+}
+
+function getServiceNowHiddenFieldValidationMessage(name, value, currentFields = []) {
+  if (!name) {
+    return "Add the ServiceNow field name.";
+  }
+  if (!SERVICENOW_FIELD_NAME_PATTERN.test(name)) {
+    return "Use a valid ServiceNow field name, such as assignment_group, category, or u_source.";
+  }
+  if (SERVICENOW_FORM_CONTROLLED_FIELDS.includes(name)) {
+    return "That field is controlled by the assignment incident form.";
+  }
+  if (!value) {
+    return "Add the value that should be sent for this field.";
+  }
+  if (currentFields.some((field) => field.name === name)) {
+    return "That ServiceNow field is already configured.";
+  }
+
+  return "";
+}
+
+function getServiceNowHiddenFieldsFromForm() {
+  return normalizeServiceNowHiddenFields(Array.from(elements.serviceNowHiddenFieldsList?.querySelectorAll("[data-service-now-hidden-field-row]") || [])
+    .map((row) => ({
+      id: row.dataset.fieldId,
+      name: row.querySelector("[data-service-now-hidden-field-name]")?.value || "",
+      value: row.querySelector("[data-service-now-hidden-field-value]")?.value || ""
+    })));
 }
 
 function updateIncidentConfigControlState() {
@@ -2953,7 +3252,8 @@ function saveIncidentConfig(event) {
     serviceNow: {
       instanceUrl: elements.serviceNowInstanceUrlInput?.value || "",
       apiPath: elements.serviceNowApiPathInput?.value || "",
-      shortDescriptionTemplate: elements.serviceNowShortDescriptionInput?.value || ""
+      shortDescriptionTemplate: elements.serviceNowShortDescriptionInput?.value || "",
+      hiddenFields: getServiceNowHiddenFieldsFromForm()
     },
     teams: {
       enabled: Boolean(elements.teamsEnabledInput?.checked),
@@ -4560,10 +4860,24 @@ function addSystem(event) {
   }
 
   const id = makeId(name, data.systems.map((system) => system.id));
-  data.systems.push({ id, name, primaryUserIds: [] });
+  data.systems.push({ id, name, primaryUserIds: [], serviceNowConfigItem: "" });
   data.queues[id] = 0;
   elements.addSystemForm.reset();
   completeAdminSave("System saved.");
+}
+
+function updateSystemServiceNowConfigItem(systemId, value) {
+  if (!isAdminTabUnlocked("systems")) {
+    return;
+  }
+
+  const system = data.systems.find((item) => item.id === systemId);
+  if (!system) {
+    return;
+  }
+
+  system.serviceNowConfigItem = String(value || "").trim();
+  completeAdminSave("ServiceNow config item saved.");
 }
 
 function removeSystem(systemId) {
@@ -4772,6 +5086,7 @@ function markSelectedAssigned(options = {}) {
       : minutesToTime(assignmentRow.availabilityStart),
     systemId: queueState.system.id,
     systemName: queueState.system.name,
+    serviceNowConfigItem: String(queueState.system.serviceNowConfigItem || "").trim(),
     userId: assignmentRow.user.id,
     userName: assignmentRow.user.name
   };
@@ -4780,6 +5095,7 @@ function markSelectedAssigned(options = {}) {
   const incidentRedirectUrl = shouldRedirectAfterAssignment()
     ? buildIncidentHandoffUrl(assignmentRecord)
     : "";
+  const shouldCollectServiceNowDetails = shouldCollectServiceNowIncidentDetails();
 
   const originalIndex = queueState.system.primaryUserIds.indexOf(assignmentRow.user.id);
   if (!selectedRow.isOther && originalIndex >= 0) {
@@ -4792,6 +5108,10 @@ function markSelectedAssigned(options = {}) {
     onSaved: () => {
       if (incidentRedirectUrl) {
         window.location.assign(incidentRedirectUrl);
+        return;
+      }
+      if (shouldCollectServiceNowDetails) {
+        openServiceNowIncidentModal(assignmentRecord.id);
       }
     }
   });
@@ -4800,6 +5120,11 @@ function markSelectedAssigned(options = {}) {
 function shouldRedirectAfterAssignment() {
   const config = getIncidentConfig();
   return config.enabled && config.mode === "redirect";
+}
+
+function shouldCollectServiceNowIncidentDetails() {
+  const config = getIncidentConfig();
+  return config.enabled && config.mode === "servicenow";
 }
 
 function shouldConfirmLongWaitAssignment(row) {
@@ -5864,7 +6189,8 @@ function normalizeIncidentConfig(config) {
     serviceNow: {
       instanceUrl: String(serviceNow.instanceUrl || "").trim(),
       apiPath: String(serviceNow.apiPath || DEFAULT_INCIDENT_CONFIG.serviceNow.apiPath).trim(),
-      shortDescriptionTemplate: String(serviceNow.shortDescriptionTemplate || DEFAULT_INCIDENT_CONFIG.serviceNow.shortDescriptionTemplate).trim()
+      shortDescriptionTemplate: String(serviceNow.shortDescriptionTemplate || DEFAULT_INCIDENT_CONFIG.serviceNow.shortDescriptionTemplate).trim(),
+      hiddenFields: normalizeServiceNowHiddenFields(serviceNow.hiddenFields || serviceNow.defaultFields || serviceNow.staticFields)
     },
     teams: {
       enabled: teams.enabled === true,
@@ -5877,8 +6203,78 @@ function normalizeIncidentConfig(config) {
   };
 }
 
+function normalizeServiceNowHiddenFields(fields) {
+  const seenNames = new Set();
+  return (Array.isArray(fields) ? fields : [])
+    .map((field) => ({
+      id: String(field?.id || makeRecordId("servicenow-field")),
+      name: String(field?.name || field?.field || field?.key || "").trim(),
+      value: String(field?.value ?? "").trim()
+    }))
+    .filter((field) => {
+      if (!field.name || !field.value || !SERVICENOW_FIELD_NAME_PATTERN.test(field.name)) {
+        return false;
+      }
+      if (SERVICENOW_FORM_CONTROLLED_FIELDS.includes(field.name) || seenNames.has(field.name)) {
+        return false;
+      }
+
+      seenNames.add(field.name);
+      return true;
+    });
+}
+
+function getServiceNowHiddenPayloadFields(fields = getIncidentConfig().serviceNow.hiddenFields) {
+  return normalizeServiceNowHiddenFields(fields).reduce((payloadFields, field) => {
+    payloadFields[field.name] = field.value;
+    return payloadFields;
+  }, {});
+}
+
+function normalizeAssignmentIncident(entry) {
+  if (!entry?.serviceNowIncident || typeof entry.serviceNowIncident !== "object") {
+    return;
+  }
+
+  const source = entry.serviceNowIncident;
+  const payload = source.payload && typeof source.payload === "object" ? source.payload : {};
+  const description = String(source.description
+    || source.serviceNowIncidentDescription
+    || payload.description
+    || payload.short_description
+    || "").trim();
+  const configItem = String(source.configItem
+    || source.configurationItem
+    || payload.cmdb_ci
+    || "").trim();
+  const priority = normalizeServiceNowPriority(source.priority || payload.priority);
+  const hiddenFieldSource = source.hiddenFields && typeof source.hiddenFields === "object"
+    ? source.hiddenFields
+    : getServiceNowHiddenPayloadFields();
+  const hiddenFields = normalizeServiceNowHiddenPayloadFields(hiddenFieldSource);
+
+  if (!description && !configItem) {
+    delete entry.serviceNowIncident;
+    return;
+  }
+
+  entry.serviceNowIncident = {
+    mode: "servicenow",
+    status: source.status || "ready",
+    preparedAt: source.preparedAt || source.createdAt || source.updatedAt || entry.assignedAt || "",
+    description,
+    serviceNowIncidentDescription: description,
+    configItem,
+    priority,
+    severity: priority,
+    hiddenFields,
+    payload: buildServiceNowIncidentPayload({ description, configItem, priority }, hiddenFields)
+  };
+}
+
 function normalizeData() {
   data.assignmentLog = Array.isArray(data.assignmentLog) ? data.assignmentLog : [];
+  data.assignmentLog.forEach(normalizeAssignmentIncident);
   data.assignmentRules = data.assignmentRules && typeof data.assignmentRules === "object"
     ? data.assignmentRules
     : { ...DEFAULT_ASSIGNMENT_RULES };
@@ -5961,6 +6357,7 @@ function normalizeData() {
   data.holidays.sort((left, right) => (left.date || "").localeCompare(right.date || ""));
 
   data.systems.forEach((system) => {
+    system.serviceNowConfigItem = String(system.serviceNowConfigItem || system.configItem || system.configurationItem || "").trim();
     system.primaryUserIds = system.primaryUserIds.filter((userId) => data.users.some((user) => user.id === userId));
     if (!(system.id in data.queues)) {
       data.queues[system.id] = 0;

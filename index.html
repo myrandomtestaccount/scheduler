@@ -158,6 +158,36 @@
       </div>
     </div>
 
+    <div id="serviceNowIncidentModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="serviceNowIncidentModalTitle">
+      <form id="serviceNowIncidentForm" class="speed-bump-card service-now-incident-card">
+        <div class="speed-bump-copy">
+          <p class="eyebrow">ServiceNow incident</p>
+          <h2 id="serviceNowIncidentModalTitle">Incident details</h2>
+
+          <label class="field">
+            <span>Description</span>
+            <textarea id="serviceNowDescriptionInput" rows="5" required placeholder="Describe the incident"></textarea>
+          </label>
+
+          <input id="serviceNowConfigItemInput" type="hidden">
+
+          <label class="field">
+            <span>Priority</span>
+            <select id="serviceNowPrioritySelect" required>
+              <option value="4">P4</option>
+              <option value="3" selected>P3</option>
+              <option value="2">P2</option>
+              <option value="1">P1</option>
+            </select>
+          </label>
+        </div>
+        <div class="speed-bump-actions">
+          <button id="cancelServiceNowIncidentButton" class="secondary-button" type="button">Cancel</button>
+          <button class="primary-button" type="submit">Save incident details</button>
+        </div>
+      </form>
+    </div>
+
     <div id="genericAlertModal" class="speed-bump-overlay hidden" role="alertdialog" aria-modal="true" aria-hidden="true" aria-labelledby="genericAlertModalTitle" aria-describedby="genericAlertModalMessage">
       <div class="speed-bump-card">
         <div class="speed-bump-icon" aria-hidden="true">!</div>
