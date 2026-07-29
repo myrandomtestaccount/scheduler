@@ -1579,6 +1579,9 @@ function completeDataSave(message = "Saved.", options = {}) {
       if (options.showToast !== false) {
         showSaveToast(message);
       }
+      if (typeof options.onSaved === "function") {
+        options.onSaved(result.data, result.revision);
+      }
     })
     .catch((error) => {
       handleSharedStateSaveError(error);
@@ -1891,16 +1894,12 @@ function renderAssignmentLog() {
 function buildIncidentHandoffUrl(entry) {
   const config = getIncidentConfig();
   const redirectUrl = config.redirect?.url || INCIDENT_CREATE_URL;
-  let url;
   try {
-    url = new URL(redirectUrl);
+    new URL(redirectUrl);
   } catch {
-    url = new URL(INCIDENT_CREATE_URL);
+    return INCIDENT_CREATE_URL;
   }
-  url.searchParams.set("assignee", entry.userName || "");
-  url.searchParams.set("coverage", entry.systemName || "");
-  url.searchParams.set("assignedAt", formatAssignmentTimestamp(entry));
-  return url.toString();
+  return redirectUrl;
 }
 
 function renderIncidentAction(entry) {
@@ -1910,7 +1909,7 @@ function renderIncidentAction(entry) {
   }
 
   if (config.mode === "redirect") {
-    return `<a class="primary-button incident-action-link" href="${escapeHtml(buildIncidentHandoffUrl(entry))}">Create incident</a>`;
+    return "";
   }
 
   return "<span class=\"assignment-done-badge incident-mode-badge\">ServiceNow configured</span>";
@@ -2811,19 +2810,30 @@ function renderWeeklyDelegationAssignmentBoard(slots, dates) {
 
 function renderDelegationOwnerSelect(slot, date, delegation) {
   const selectedUserId = delegation?.delegatorUserId || "";
-  const label = `${formatDelegationSlotDefinition(slot)} on ${formatDisplayDate(date)}`;
+  const label = `${formatDelegationSlotDefinitionForDate(slot, date)} on ${formatDisplayDate(date)}`;
+  const selectedUser = getUserFromReference(selectedUserId);
+  const selectedEligibility = selectedUser
+    ? getDelegatorAssignmentEligibility(selectedUser, slot, date)
+    : { selectable: true, reason: "" };
+  const invalidSelectedUser = Boolean(selectedUser && !selectedEligibility.selectable);
   const options = [
     `<option value="">Unassigned</option>`,
-    ...data.users.map((user) => (
-      `<option value="${escapeHtml(user.id)}" ${user.id === selectedUserId ? "selected" : ""}>${escapeHtml(user.name)}</option>`
-    ))
+    ...data.users.map((user) => {
+      const eligibility = getDelegatorAssignmentEligibility(user, slot, date);
+      const reason = eligibility.selectable ? "" : ` — ${eligibility.reason}`;
+      return `<option value="${escapeHtml(user.id)}" ${user.id === selectedUserId ? "selected" : ""} ${eligibility.selectable ? "" : "disabled"}>${escapeHtml(user.name)}${escapeHtml(reason)}</option>`;
+    })
   ].join("");
+  const warning = invalidSelectedUser
+    ? `<span class="delegation-owner-warning">${escapeHtml(selectedEligibility.reason)}</span>`
+    : "";
 
   return `
-    <label class="delegation-owner-field">
+    <label class="delegation-owner-field ${invalidSelectedUser ? "invalid" : ""}">
       <select class="delegation-owner-select" data-slot-id="${escapeHtml(slot.id)}" data-date="${escapeHtml(date)}" aria-label="Delegator for ${escapeHtml(label)}">
         ${options}
       </select>
+      ${warning}
     </label>
   `;
 }
@@ -4142,6 +4152,24 @@ function saveDelegationAssignmentBoard() {
     return;
   }
 
+  const invalidAssignment = visibleAssignments
+    .map(({ select, slot, date }) => {
+      const user = getUserFromReference(select.value);
+      return {
+        select,
+        slot,
+        date,
+        user,
+        eligibility: user ? getDelegatorAssignmentEligibility(user, slot, date) : { selectable: true, reason: "" }
+      };
+    })
+    .find(({ user, eligibility }) => user && !eligibility.selectable);
+  if (invalidAssignment) {
+    showGenericAlert("Delegator unavailable", formatDelegatorUnavailableMessage(invalidAssignment));
+    invalidAssignment.select.focus();
+    return;
+  }
+
   data.delegations = data.delegations.filter((delegation) => (
     !visibleAssignments.some(({ slot, date }) => isDelegationForSlotDate(delegation, slot, date))
   ));
@@ -4201,6 +4229,20 @@ function addDelegation(event) {
   const delegatorUserId = data.users.some((user) => user.id === elements.delegationUserSelect?.value)
     ? elements.delegationUserSelect.value
     : "";
+  const delegatorUser = getUserFromReference(delegatorUserId);
+  const eligibility = delegatorUser
+    ? getDelegatorAssignmentEligibility(delegatorUser, selectedSlot, date)
+    : { selectable: true, reason: "" };
+  if (delegatorUser && !eligibility.selectable) {
+    showGenericAlert("Delegator unavailable", formatDelegatorUnavailableMessage({
+      slot: selectedSlot,
+      date,
+      user: delegatorUser,
+      eligibility
+    }));
+    return;
+  }
+
   const delegation = {
     id: makeRecordId("delegation"),
     delegatorUserId,
@@ -4320,9 +4362,92 @@ function formatTimeRangeForDisplay(date, start, end, sourceTimeZone = EASTERN_TI
 }
 
 function formatDelegationSlotDefinition(slot) {
-  const date = getDelegationReferenceDate();
+  return formatDelegationSlotDefinitionForDate(slot, getDelegationReferenceDate());
+}
+
+function formatDelegationSlotDefinitionForDate(slot, date) {
   const abbreviation = getSelectedTimezoneAbbreviationForEasternTime(date, slot.start);
   return `${formatDelegationSlotDisplayTimeRange(slot, date)} ${abbreviation}`;
+}
+
+function getDelegatorAssignmentEligibility(user, slot, date) {
+  if (!user || !slot || !isValidDateInput(date) || !isValidTimeRange(slot.start, slot.end)) {
+    return { selectable: false, reason: "Invalid slot" };
+  }
+
+  const holidays = getHolidaysForUser(user.id, date);
+  if (holidays.length > 0) {
+    const holidayLabel = holidays.map((holiday) => holiday.name || "Holiday").join(", ");
+    return { selectable: false, reason: `Holiday: ${holidayLabel}` };
+  }
+
+  const windows = getScheduleWindowsForDate(user, date, getDayNameFromDate(date));
+  const slotStart = toMinutes(slot.start);
+  const slotEnd = toMinutes(slot.end);
+  if (!isTimeRangeCoveredByWindows(slotStart, slotEnd, windows)) {
+    return { selectable: false, reason: formatDelegatorScheduleCoverageReason(windows, date) };
+  }
+
+  const overlappingBreak = getDelegatorOverlappingBreak(user, slot, date);
+  if (overlappingBreak) {
+    return {
+      selectable: false,
+      reason: `Break ${formatTimeRangeForDisplay(date, overlappingBreak.start, overlappingBreak.end, EASTERN_TIME_ZONE)} overlaps this slot`
+    };
+  }
+
+  return { selectable: true, reason: "" };
+}
+
+function isTimeRangeCoveredByWindows(startMinutes, endMinutes, windows) {
+  let coveredUntil = startMinutes;
+  const sortedWindows = windows
+    .slice()
+    .sort((left, right) => toMinutes(left.start) - toMinutes(right.start));
+
+  for (const window of sortedWindows) {
+    const windowStart = toMinutes(window.start);
+    const windowEnd = toMinutes(window.end);
+    if (windowEnd <= coveredUntil) {
+      continue;
+    }
+    if (windowStart > coveredUntil) {
+      return false;
+    }
+
+    coveredUntil = Math.max(coveredUntil, windowEnd);
+    if (coveredUntil >= endMinutes) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function formatDelegatorScheduleCoverageReason(windows, date) {
+  if (windows.length === 0) {
+    return "Not scheduled";
+  }
+
+  const scheduleLabel = windows
+    .map((window) => formatTimeRangeForDisplay(date, window.start, window.end, EASTERN_TIME_ZONE))
+    .join(", ");
+  return `Only scheduled ${scheduleLabel}`;
+}
+
+function getDelegatorOverlappingBreak(user, slot, date) {
+  return data.exceptions.find((exception) => (
+    exception.userId === user.id
+      && exception.date === date
+      && exception.type === "break"
+      && isValidTimeRange(exception.start, exception.end)
+      && delegationSlotsOverlap(exception, slot)
+  )) || null;
+}
+
+function formatDelegatorUnavailableMessage({ slot, date, user, eligibility }) {
+  const slotLabel = `${formatDelegationSlotDefinitionForDate(slot, date)} on ${formatDisplayDate(date)}`;
+  return `${user.name} cannot be assigned to ${slotLabel}. ${eligibility.reason}. Choose someone scheduled for the full slot or leave it unassigned.`;
 }
 
 function getSelectedDelegationSlot() {
@@ -4652,6 +4777,9 @@ function markSelectedAssigned(options = {}) {
   };
   data.assignmentLog.push(assignmentRecord);
   lastAssignmentId = assignmentRecord.id;
+  const incidentRedirectUrl = shouldRedirectAfterAssignment()
+    ? buildIncidentHandoffUrl(assignmentRecord)
+    : "";
 
   const originalIndex = queueState.system.primaryUserIds.indexOf(assignmentRow.user.id);
   if (!selectedRow.isOther && originalIndex >= 0) {
@@ -4659,7 +4787,19 @@ function markSelectedAssigned(options = {}) {
   }
 
   clearSelectedAssignee();
-  completeDataSave("Ticket assigned.", { showToast: false });
+  completeDataSave("Ticket assigned.", {
+    showToast: false,
+    onSaved: () => {
+      if (incidentRedirectUrl) {
+        window.location.assign(incidentRedirectUrl);
+      }
+    }
+  });
+}
+
+function shouldRedirectAfterAssignment() {
+  const config = getIncidentConfig();
+  return config.enabled && config.mode === "redirect";
 }
 
 function shouldConfirmLongWaitAssignment(row) {

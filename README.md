@@ -84,11 +84,11 @@ Admin sections:
 - `Users`: add/remove team members.
 - `Regions`: choose whether to separate users by region, then define the region list used in Team and queue views.
 - `Schedules`: add weekly schedules, click the all-user graph to prefill user/day/time, add breaks, add extra coverage slots, and review readable user-by-user schedules.
-- `Delegation`: define predefined coverage time slots, assign a delegator or leave a slot/date unassigned, and review the day/week graph.
+- `Delegation`: define predefined coverage time slots, assign only scheduled delegators or leave a slot/date unassigned, and review the day/week graph.
 - `Assignment rules`: choose how recommendations are sorted. The default is schedule-first.
 - `Shift presets`: define reusable shift names and times.
 - `Systems / apps`: add systems and assign/reorder primary SMEs.
-- `Incidents`: turn incident creation on/off, configure redirect handoff links, and prepare ServiceNow or Teams settings.
+- `Incidents`: turn incident creation on/off, configure post-assignment redirects, and prepare ServiceNow or Teams settings.
 - `Holidays`: add user-specific or all-team holidays.
 - `Data`: export/import JSON backups.
 

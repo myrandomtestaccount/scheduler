@@ -244,6 +244,7 @@
                   <input id="delegationGraphDateInput" type="date">
                 </label>
               </div>
+              <p class="meta">Only users scheduled for the full slot, including extra slots, can be selected as delegators. Holidays and breaks block selection.</p>
               <div id="delegationCanvas" class="delegation-assignment-board day-board" aria-label="Delegation ownership board"></div>
               <button id="saveDelegationAssignmentsButton" class="primary-button" type="button">Save delegation ownership</button>
             </div>
@@ -383,7 +384,7 @@
                   <input type="radio" name="incidentCreationMode" value="redirect">
                   <span>
                     <strong>Redirect to another page</strong>
-                    <small>Show the current Create incident link after assignment.</small>
+                    <small>Open the configured redirect link after assignment.</small>
                   </span>
                 </label>
                 <label class="incident-choice-card">
@@ -400,7 +401,7 @@
                   <span>Redirect link</span>
                   <input id="incidentRedirectUrlInput" type="url" placeholder="https://www.google.com/">
                 </label>
-                <p class="meta">The app appends assignee and coverage query parameters to this link.</p>
+                <p class="meta">The app redirects to this exact link after assignment. No query parameters are added.</p>
               </div>
 
               <div id="incidentServiceNowSettings" class="incident-settings-panel">

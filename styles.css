@@ -252,12 +252,12 @@ button:disabled {
 .time-zone-card {
   align-items: center;
   display: inline-flex;
-  flex: 0 1 15.5rem;
+  flex: 0 1 18.75rem;
   justify-content: center;
   max-width: 100%;
-  min-width: 13.5rem;
+  min-width: 17rem;
   min-height: 2.9rem;
-  width: clamp(13.5rem, 20vw, 15.5rem);
+  width: clamp(17rem, 24vw, 18.75rem);
 }
 
 .time-zone-select {
@@ -1328,6 +1328,16 @@ fieldset {
 .delegation-owner-field select {
   min-height: 2.2rem;
   width: 100%;
+}
+
+.delegation-owner-field.invalid select {
+  border-color: var(--danger);
+}
+
+.delegation-owner-warning {
+  color: var(--danger);
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .list-item {
