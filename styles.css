@@ -849,6 +849,31 @@ fieldset {
   position: absolute;
 }
 
+.data-management-card {
+  margin-bottom: 0.9rem;
+}
+
+.data-management-card h3 {
+  margin: 0;
+}
+
+.retention-policy-form {
+  align-items: end;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
+.retention-policy-form .button-row {
+  align-items: center;
+  margin-top: 0;
+}
+
+#dataPreview {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  min-height: 20rem;
+}
+
 .meta {
   color: var(--muted);
 }
@@ -1911,10 +1936,14 @@ fieldset {
   background: var(--primary-soft);
   border: 1px solid var(--line);
   border-radius: 22px;
+  box-shadow: var(--shadow);
   display: flex;
   gap: 1rem;
   justify-content: space-between;
   padding: 0.85rem;
+  position: sticky;
+  top: 0.65rem;
+  z-index: 24;
 }
 
 .admin-lock-bar strong {
@@ -1926,6 +1955,10 @@ fieldset {
   flex-wrap: wrap;
   gap: 0.55rem;
   justify-content: flex-end;
+}
+
+.admin-lock-actions > * {
+  min-height: 2.45rem;
 }
 
 .tab-panel.is-locked > :not(.admin-lock-bar) {
@@ -2383,30 +2416,6 @@ fieldset {
   width: min(100%, 34rem);
 }
 
-.speed-bump-icon {
-  align-items: center;
-  background: var(--danger-soft);
-  border: 1px solid var(--danger-line);
-  border-radius: 999px;
-  color: var(--danger);
-  display: inline-flex;
-  font-size: 1.25rem;
-  font-weight: 950;
-  height: 3rem;
-  justify-content: center;
-  width: 3rem;
-}
-
-.speed-bump-icon svg {
-  fill: none;
-  height: 1.45rem;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
-  width: 1.45rem;
-}
-
 .contact-speed-bump-card {
   border-color: var(--primary-line);
 }
@@ -2423,41 +2432,9 @@ fieldset {
   width: min(100%, 38rem);
 }
 
-.assignment-speed-bump .speed-bump-icon {
-  background: var(--warning-soft);
-  border-color: var(--warning);
-  color: var(--warning);
-  font-size: 0;
-  position: relative;
-}
-
-.assignment-speed-bump .speed-bump-icon::before {
-  background:
-    radial-gradient(circle at center, currentColor 0 0.08rem, transparent 0.09rem),
-    linear-gradient(currentColor, currentColor) 50% 50% / 0.12rem 0.65rem no-repeat,
-    linear-gradient(currentColor, currentColor) 61% 55% / 0.5rem 0.12rem no-repeat;
-  border: 2px solid currentColor;
-  border-radius: 999px;
-  content: "";
-  height: 1.45rem;
-  width: 1.45rem;
-}
-
-.contact-speed-bump-icon {
-  background: var(--primary-soft);
-  border-color: var(--primary-line);
-  color: var(--primary);
-}
-
 .backup-speed-bump-card {
   border-color: var(--warning);
   max-width: 38rem;
-}
-
-.backup-speed-bump-icon {
-  background: var(--warning-soft);
-  border-color: var(--warning);
-  color: var(--warning);
 }
 
 .speed-bump-copy {

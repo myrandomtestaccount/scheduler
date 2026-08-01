@@ -14,6 +14,10 @@ const configDir = path.resolve(
     || path.join(os.homedir(), "Documents", "scheduler-config")
 );
 const stateFile = path.join(configDir, "scheduler-state.json");
+const backupDir = path.join(configDir, "backups");
+const BACKUP_TIME_ZONE = "America/New_York";
+const DEFAULT_BACKUP_SNAPSHOT_RETENTION_DAYS = 90;
+const BACKUP_FILENAME_PATTERN = /^scheduler-state-(\d{8})_(\d+)\.json$/;
 let stateLock = Promise.resolve();
 
 const server = http.createServer(async (request, response) => {
@@ -40,6 +44,7 @@ server.listen(port, host, () => {
   const displayHost = host === "127.0.0.1" ? "localhost" : host;
   console.log(`SME Scheduler running at http://${displayHost}:${port}`);
   console.log(`Shared config: ${stateFile}`);
+  console.log(`JSON snapshots: ${backupDir}`);
 });
 
 async function handleStateRequest(request, response) {
@@ -83,7 +88,8 @@ async function handleStateRequest(request, response) {
     sendJson(response, 200, {
       revision: saved.revision,
       data: saved.data,
-      configPath: stateFile
+      configPath: stateFile,
+      backupPath: saved.backupPath
     });
   });
 }
@@ -139,13 +145,129 @@ async function readStateFile() {
 async function writeStateFile(data) {
   await fs.mkdir(configDir, { recursive: true });
   const text = `${JSON.stringify(data, null, 2)}\n`;
+  const currentText = await readCurrentStateText();
+  const backupPath = currentText && hashText(currentText) !== hashText(text)
+    ? await writeBackupSnapshot(currentText)
+    : null;
   const tempFile = path.join(configDir, `.scheduler-state.${process.pid}.${Date.now()}.tmp`);
   await fs.writeFile(tempFile, text, "utf8");
   await fs.rename(tempFile, stateFile);
+  try {
+    await cleanupBackupSnapshots(getBackupSnapshotRetentionDays(data));
+  } catch (error) {
+    console.warn(`Could not clean JSON snapshots: ${error.message}`);
+  }
   return {
     revision: hashText(text),
-    data
+    data,
+    backupPath
   };
+}
+
+async function readCurrentStateText() {
+  try {
+    return await fs.readFile(stateFile, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return "";
+    }
+
+    throw error;
+  }
+}
+
+async function writeBackupSnapshot(text) {
+  await fs.mkdir(backupDir, { recursive: true });
+  const backupPath = await getNextBackupPath();
+  await fs.writeFile(backupPath, text, "utf8");
+  return backupPath;
+}
+
+async function getNextBackupPath(date = new Date()) {
+  const dateStamp = formatBackupDateStamp(date);
+  const prefix = `scheduler-state-${dateStamp}_`;
+  const files = await readBackupDirectoryFiles();
+  const nextSequence = files.reduce((maxSequence, fileName) => {
+    if (!fileName.startsWith(prefix) || !fileName.endsWith(".json")) {
+      return maxSequence;
+    }
+
+    const sequence = Number.parseInt(fileName.slice(prefix.length, -".json".length), 10);
+    return Number.isFinite(sequence) ? Math.max(maxSequence, sequence) : maxSequence;
+  }, 0) + 1;
+
+  return path.join(backupDir, `${prefix}${String(nextSequence).padStart(2, "0")}.json`);
+}
+
+async function cleanupBackupSnapshots(retentionDays) {
+  const files = await readBackupDirectoryFiles();
+  if (files.length === 0) {
+    return;
+  }
+
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  await Promise.all(files.map(async (fileName) => {
+    const match = BACKUP_FILENAME_PATTERN.exec(fileName);
+    if (!match) {
+      return;
+    }
+
+    const backupDate = parseBackupDateStamp(match[1]);
+    if (!backupDate || backupDate.getTime() >= cutoff) {
+      return;
+    }
+
+    await fs.unlink(path.join(backupDir, fileName));
+  }));
+}
+
+async function readBackupDirectoryFiles() {
+  try {
+    return await fs.readdir(backupDir);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+function getBackupSnapshotRetentionDays(data) {
+  const value = data?.retentionPolicy?.backupSnapshotDays;
+  const parsedValue = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsedValue)) {
+    return DEFAULT_BACKUP_SNAPSHOT_RETENTION_DAYS;
+  }
+
+  return Math.min(Math.max(parsedValue, 1), 3650);
+}
+
+function formatBackupDateStamp(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: BACKUP_TIME_ZONE,
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.month}${values.day}${values.year}`;
+}
+
+function parseBackupDateStamp(dateStamp) {
+  const month = Number(dateStamp.slice(0, 2));
+  const day = Number(dateStamp.slice(2, 4));
+  const year = Number(dateStamp.slice(4, 8));
+  const parsedDate = new Date(Date.UTC(year, month - 1, day, 12));
+  if (
+    parsedDate.getUTCFullYear() !== year
+    || parsedDate.getUTCMonth() !== month - 1
+    || parsedDate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return parsedDate;
 }
 
 function validateSchedulerData(candidate) {

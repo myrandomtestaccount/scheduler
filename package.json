@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "test": "node tests/schedule-core.test.js",
+    "check": "node --check src/schedule-core.js && node --check app.js && node --check server.js && node tests/schedule-core.test.js"
+  }
+}

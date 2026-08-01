@@ -1,6 +1,6 @@
 # SME Scheduler
 
-A tiny local scheduler for assigning work to system/application SMEs. It has no build step, no package manager, and no database.
+A tiny local scheduler for assigning work to system/application SMEs. It has no build step and no database.
 
 ## Run
 
@@ -20,29 +20,41 @@ Then open `http://localhost:4173`.
 
 On Windows, double-click `start-shared.bat` if Node.js is installed.
 
+## Test
+
+```bash
+npm test
+```
+
+For syntax checks plus logic tests:
+
+```bash
+npm run check
+```
+
 ## Functionality Reference
 
 ### Running and Storage
 
 - `index.html`: primary assignment page for delegators and regular users.
-- `admin.html`: admin-only setup page for team, schedule, coverage, delegation, incidents, and backup settings.
+- `admin.html`: admin-only setup page for team, schedule, coverage, delegation, incidents, and data maintenance.
 - Static mode: opening the HTML files directly stores data in browser `localStorage`.
 - Shared mode: `node server.js` serves the app at `http://localhost:4173` and stores shared state in a JSON file.
 - Windows launcher: `start-shared.bat` starts shared mode on Windows when Node.js is installed.
 - macOS launcher: `start-shared.command` starts shared mode on macOS.
 - Shared-state conflict handling: saves use optimistic locking, reload newer shared data when another browser saves first, and show a sync warning.
-- JSON backup: admins can export, import, preview, and reset scheduler data.
+- Data maintenance: admins can set retention, run cleanup, export/import JSON, preview data, and reset sample data.
 
 ### Main Assignment Page
 
 - Coverage picker: choose a region and system/app that needs a ticket owner.
 - Current queue: shows the recommended SME order for the selected coverage.
-- Availability badges: labels users as available, later today, on break, done today, not scheduled, or on holiday.
+- Availability badges: labels users as available, later today, OOO, done today, or not scheduled.
 - Assignment action: selecting an SME and clicking `Mark selected user assigned` records the ticket owner and advances the relevant queue.
 - Queue advancement: normal SME assignments rotate the queue to the next SME for that coverage.
 - `Other` option: lets a delegator pick someone from the wider roster without advancing the selected coverage queue.
 - Other roster ordering: online users in the current region view appear by that region’s team ranking first, then users scheduled later today appear by schedule order.
-- Unselectable users: people with no schedule, completed schedule, or holiday are blocked from normal assignment.
+- Unselectable users: people with no schedule, completed schedule, or all-day OOO are blocked from normal assignment.
 - Future assignment speedbump: if everyone is unavailable but someone is scheduled later, the app can warn before assigning far ahead.
 - Daily ownership ranking: shows who has received the most tickets today.
 - Coverage dashboard: shows all coverage queues for the selected region, ticket counts, availability, and quick open buttons.
@@ -58,9 +70,9 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 - Shift presets: admins can define reusable shift names and times such as early, regular, and late.
 - Custom shifts: users can still have custom schedule times on any day.
 - Multiple shifts: the same user can have different shifts on different days.
-- Breaks: admins can add dated break windows that temporarily block availability.
+- OOO timed breaks: admins can add dated time windows that temporarily block availability.
 - Extra slots: admins can add dated extra availability windows outside normal schedules.
-- Holidays: admins can mark one user or all users as unavailable for a date.
+- OOO: admins can mark one user or all users as unavailable for a full day, or add a timed break.
 - Schedule graph: admins can review schedules in day or week view.
 - All-region graph: the global admin day graph uses a padded 26-hour window from one hour before APAC-style evening coverage through one hour after Americas close.
 - Regional graph limits: each region graph shows its coverage window with one hour of padding before and after.
@@ -93,7 +105,7 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 - Region hours: each region stores its own Eastern Time operating window. Windows can cross midnight, but cannot exceed 14 hours.
 - User-region mapping: users can belong to one or more regions.
 - Regional admin view: when regions exist, overview tabs can switch between `All regions` and each region page; Rules is always edited on a specific region.
-- Regional settings: each region page has its own team ranking, assignment rules, shift presets, holidays, coverage list, SME mappings, and queue positions.
+- Regional settings: each region page has its own team ranking, assignment rules, shift presets, OOO blocks, coverage list, SME mappings, and queue positions.
 - Regional schedule graph: when a region admin view is selected, the graph timeline uses that region’s hours as its visible limits and shows only users assigned to that region. It does not render a separate region-hours lane.
 - Regional shifts: every region gets a default region-hours preset based on its operating window, for example AMER `07:00–19:00` ET and APAC `19:00–07:00` ET; All regions shows current shifts grouped by region.
 - Coverage management: admins can add and remove systems/apps in the selected admin view.
@@ -110,8 +122,8 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 - Week view: admins can assign slot owners across the business week.
 - Scheduled-only delegators: a delegator can only be selected when scheduled for the full slot.
 - Extra-slot support: extra availability windows count as valid schedule coverage for delegation.
-- Holiday blocking: holiday users cannot be selected as delegators.
-- Break blocking: users with a break overlapping the slot cannot be selected as delegators.
+- All-day OOO blocking: OOO users cannot be selected as delegators.
+- Timed OOO blocking: users with an OOO break overlapping the slot cannot be selected as delegators.
 - Unassigned slots: slots can intentionally remain unassigned.
 - Current delegator panel: the main page displays the active delegator for the current time.
 
@@ -132,7 +144,7 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 
 - Locked admin sections: sensitive sections must be unlocked before editing; admin actions stay unlocked after saving until you click `Lock`.
 - Admin save buttons: each locked section header includes `Save` so admins can explicitly persist without relocking.
-- Backup lock: import/reset actions require an extra backup unlock confirmation.
+- Data lock: cleanup, import, and reset actions require an extra data unlock confirmation.
 - Confirmation modals: destructive user, shift, schedule, holiday, delegation, and reset actions ask before changing data.
 - Validation alerts: invalid dates, time ranges, overlaps, missing required fields, and import errors show friendly warnings.
 - Light/dark mode support: controls and dropdowns are styled to remain readable in both themes.
@@ -142,7 +154,7 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 
 When opened directly from `index.html`, the app saves to browser `localStorage`.
 
-Use `Export JSON backup` before moving data to another computer or browser profile. Use `Import JSON backup` to restore it.
+Use `Export JSON file` before moving data to another computer or browser profile. Use `Import JSON file` to restore it.
 
 When launched with `node server.js`, the app uses a shared JSON file instead:
 
@@ -151,6 +163,14 @@ When launched with `node server.js`, the app uses a shared JSON file instead:
 ```
 
 On this Mac that resolves to `/Users/antonmaslov/Documents/scheduler-config/scheduler-state.json`. On Windows it resolves to `C:\Users\<you>\Documents\scheduler-config\scheduler-state.json`.
+
+Shared mode also writes dated JSON snapshots before overwriting existing data:
+
+```text
+~/Documents/scheduler-config/backups/scheduler-state-MMDDYYYY_01.json
+```
+
+Retention cleanup removes old ticket history, OOO/break records, and delegation records while keeping team, schedules, regions, systems, rules, shifts, and current queue positions.
 
 You can choose a different shared folder:
 
@@ -176,14 +196,14 @@ Admin sections:
 
 - `Users`: add/remove team members and reorder each region’s independent ranking.
 - `Regions`: choose whether to separate users by region, define each region, and set that region’s operating hours.
-- `Schedules`: add weekly schedules, click the all-user graph to prefill user/day/time, add breaks, add extra coverage slots, and review readable user-by-user schedules.
+- `Schedules`: add weekly schedules, click the all-user graph to prefill user/day/time, and review readable user-by-user schedules.
 - `Delegation`: define predefined coverage time slots, assign only scheduled delegators or leave a slot/date unassigned, and review the day/week graph.
 - `Assignment rules`: choose how recommendations are sorted for a specific region. Each region stores its own rule preset. The default is schedule-first.
 - `Shift presets`: define reusable shift names and times for the selected admin view. The generated region-hours preset can be up to 14 hours; regular user shifts remain capped at 12 hours.
 - `Systems / apps`: add systems, select one or more regions per system, define ServiceNow config items when ServiceNow mode is enabled, and assign/reorder primary SMEs from those selected regions.
 - `Incidents`: turn incident creation on/off, configure post-assignment redirects, and prepare ServiceNow or Teams settings.
-- `Holidays`: add individual user holidays or choose `All users in <region>` for region-wide holidays.
-- `Data`: export/import JSON backups.
+- `OOO`: add all-day OOO or timed breaks for an individual user, or choose `All users in <region>` for region-wide OOO.
+- `Data maintenance`: set cleanup retention, run cleanup, export/import JSON files, and reset sample data.
 
 Incident templates support `{{assignee}}`, `{{assignee_mention}}`, `{{coverage}}`, `{{assigned_at}}`, `{{incident_url}}`, `{{servicenow_incident_description}}`, and `{{servicenow_incident_id}}`.
 
@@ -202,6 +222,9 @@ index.html
 admin.html
 styles.css
 app.js
+src/schedule-core.js
+tests/schedule-core.test.js
+package.json
 server.js
 images/logo.png
 start-shared.bat

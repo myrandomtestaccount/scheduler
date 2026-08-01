@@ -71,7 +71,7 @@
         <div class="tabs" role="tablist" aria-label="Admin sections">
           <button class="tab-button active" type="button" data-tab="schedules">Schedules</button>
           <button class="tab-button" type="button" data-tab="delegations">Delegation</button>
-          <button class="tab-button" type="button" data-tab="holidays">Holidays</button>
+          <button class="tab-button" type="button" data-tab="holidays">OOO</button>
           <label class="tab-select-label">
             <span class="sr-only">Other admin sections</span>
             <select id="otherAdminSelect" class="tab-select" aria-label="Other admin sections">
@@ -83,7 +83,7 @@
               <option value="systems">Coverage</option>
               <option value="timezones">Time zones</option>
               <option value="incidents">Incidents</option>
-              <option value="data">Backup</option>
+              <option value="data">Data maintenance</option>
             </select>
           </label>
         </div>
@@ -124,7 +124,6 @@
             </label>
             <button class="primary-button" type="submit">Add region</button>
           </form>
-          <p class="meta">Region hours can cross midnight and must be 14 hours or less. This is the expected regional window, not staffed coverage.</p>
           <div id="regionsList" class="stack-list"></div>
         </section>
 
@@ -197,44 +196,6 @@
                 </div>
               </div>
             </div>
-
-            <section class="card-form wide-card">
-              <div>
-                <h3>Availability changes</h3>
-              </div>
-              <form id="addSlotForm" class="slot-form">
-                <div class="two-columns">
-                  <label class="field">
-                    <span>User</span>
-                    <select id="timelineUserSelect"></select>
-                  </label>
-                  <label class="field">
-                    <span>Date</span>
-                    <input id="slotDateInput" type="date" required>
-                  </label>
-                </div>
-                <div class="two-columns">
-                  <label class="field">
-                    <span id="slotStartLabel">Start</span>
-                    <input id="slotStartInput" type="time" value="12:00" required>
-                  </label>
-                  <label class="field">
-                    <span id="slotEndLabel">End</span>
-                    <input id="slotEndInput" type="time" value="12:30" required>
-                  </label>
-                </div>
-                <label class="field">
-                  <span>Comment</span>
-                  <input id="slotReasonInput" type="text" required>
-                </label>
-                <button class="primary-button" type="submit">Add change</button>
-              </form>
-
-              <div>
-                <h3>Saved changes</h3>
-                <div id="slotsList" class="stack-list"></div>
-              </div>
-            </section>
           </div>
         </section>
 
@@ -355,14 +316,31 @@
               <select id="holidayUserSelect"></select>
             </label>
             <label class="field">
+              <span>OOO type</span>
+              <select id="holidayTypeSelect">
+                <option value="all-day" selected>All day</option>
+                <option value="time">Timed break</option>
+              </select>
+            </label>
+            <label class="field">
               <span>Date</span>
               <input id="holidayDateInput" type="date" required>
             </label>
+            <div id="holidayTimeFields" class="two-columns hidden">
+              <label class="field">
+                <span id="holidayStartLabel">Start</span>
+                <input id="holidayStartInput" type="time" value="12:00">
+              </label>
+              <label class="field">
+                <span id="holidayEndLabel">End</span>
+                <input id="holidayEndInput" type="time" value="12:30">
+              </label>
+            </div>
             <label class="field">
-              <span>Holiday / note</span>
+              <span>Reason / note</span>
               <input id="holidayNameInput" type="text">
             </label>
-            <button class="primary-button" type="submit">Add holiday</button>
+            <button class="primary-button" type="submit">Add OOO</button>
           </form>
           <div id="holidaysList" class="stack-list"></div>
         </section>
@@ -493,15 +471,49 @@
         </section>
 
         <section id="dataTab" class="tab-panel" data-lockable-admin-tab="data">
-          <div class="button-row">
-            <button id="exportButton" class="primary-button" type="button" data-lock-exempt>Export JSON backup</button>
-            <label class="file-button">
-              Import JSON backup
-              <input id="importInput" type="file" accept="application/json">
-            </label>
-            <button id="resetButton" class="danger-button" type="button">Reset sample data</button>
-          </div>
-          <textarea id="dataPreview" readonly></textarea>
+          <section class="card-form data-management-card">
+            <div>
+              <p class="eyebrow">Data maintenance</p>
+              <h3>Retention policy</h3>
+              <p class="meta retention-help">Keep the last N days. Saving removes only history older than N days. Cleanup never removes users, schedules, regions, shifts, coverage, rules, or current queue positions.</p>
+            </div>
+            <form id="retentionPolicyForm" class="retention-policy-form">
+              <label class="field">
+                <span>Keep ticket history (days)</span>
+                <input id="assignmentRetentionDaysInput" type="number" min="1" max="3650" step="1" required>
+              </label>
+              <label class="field">
+                <span>Keep OOO / breaks (days)</span>
+                <input id="oooRetentionDaysInput" type="number" min="1" max="3650" step="1" required>
+              </label>
+              <label class="field">
+                <span>Keep delegations (days)</span>
+                <input id="delegationRetentionDaysInput" type="number" min="1" max="3650" step="1" required>
+              </label>
+              <label class="field">
+                <span>Keep JSON snapshots (days)</span>
+                <input id="backupRetentionDaysInput" type="number" min="1" max="3650" step="1" required>
+              </label>
+              <div class="button-row">
+                <button class="primary-button" type="submit">Save policy and clean old records</button>
+              </div>
+            </form>
+          </section>
+          <section class="card-form data-management-card">
+            <div>
+              <p class="eyebrow">JSON files</p>
+              <h3>Export, import, reset</h3>
+            </div>
+            <div class="button-row">
+              <button id="exportButton" class="primary-button" type="button" data-lock-exempt>Export JSON file</button>
+              <label class="file-button">
+                Import JSON file
+                <input id="importInput" type="file" accept="application/json">
+              </label>
+              <button id="resetButton" class="danger-button" type="button">Reset sample data</button>
+            </div>
+          </section>
+          <textarea id="dataPreview" readonly aria-label="Current scheduler JSON preview"></textarea>
         </section>
       </section>
     </main>
@@ -513,7 +525,6 @@
 
     <div id="devModeModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="devModeModalTitle" aria-describedby="devModeModalImpact">
       <div class="speed-bump-card backup-speed-bump-card">
-        <div class="speed-bump-icon backup-speed-bump-icon" aria-hidden="true">!</div>
         <div class="speed-bump-copy">
           <p class="eyebrow">Developer mode</p>
           <h2 id="devModeModalTitle">Use test time?</h2>
@@ -532,7 +543,6 @@
 
     <div id="syncStateModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="syncStateModalTitle" aria-describedby="syncStateModalMessage">
       <div class="speed-bump-card">
-        <div class="speed-bump-icon" aria-hidden="true">!</div>
         <div class="speed-bump-copy">
           <p class="eyebrow">Shared config</p>
           <h2 id="syncStateModalTitle">Shared data changed</h2>
@@ -546,7 +556,6 @@
 
     <div id="removeUserModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="removeUserModalTitle" aria-describedby="removeUserModalImpact">
       <div class="speed-bump-card">
-        <div class="speed-bump-icon" aria-hidden="true">!</div>
         <div class="speed-bump-copy">
           <p class="eyebrow">Confirm removal</p>
           <h2 id="removeUserModalTitle">Remove team member?</h2>
@@ -562,7 +571,6 @@
 
     <div id="removeShiftModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="removeShiftModalTitle" aria-describedby="removeShiftModalImpact">
       <div class="speed-bump-card">
-        <div class="speed-bump-icon" aria-hidden="true">!</div>
         <div class="speed-bump-copy">
           <p class="eyebrow">Confirm removal</p>
           <h2 id="removeShiftModalTitle">Remove shift?</h2>
@@ -578,7 +586,6 @@
 
     <div id="removeScheduleModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="removeScheduleModalTitle" aria-describedby="removeScheduleModalImpact">
       <div class="speed-bump-card">
-        <div class="speed-bump-icon" aria-hidden="true">!</div>
         <div class="speed-bump-copy">
           <p class="eyebrow">Confirm removal</p>
           <h2 id="removeScheduleModalTitle">Remove schedule?</h2>
@@ -595,42 +602,40 @@
 
     <div id="removeHolidayModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="removeHolidayModalTitle" aria-describedby="removeHolidayModalImpact">
       <div class="speed-bump-card">
-        <div class="speed-bump-icon" aria-hidden="true">!</div>
         <div class="speed-bump-copy">
           <p class="eyebrow">Confirm removal</p>
-          <h2 id="removeHolidayModalTitle">Remove holiday?</h2>
+          <h2 id="removeHolidayModalTitle">Remove OOO?</h2>
           <p id="removeHolidayModalName" class="speed-bump-name"></p>
           <p id="removeHolidayModalImpact" class="speed-bump-impact"></p>
         </div>
         <div class="speed-bump-actions">
-          <button id="cancelRemoveHolidayButton" class="secondary-button" type="button">Keep holiday</button>
-          <button id="confirmRemoveHolidayButton" class="danger-button" type="button">Remove holiday</button>
+          <button id="cancelRemoveHolidayButton" class="secondary-button" type="button">Keep OOO</button>
+          <button id="confirmRemoveHolidayButton" class="danger-button" type="button">Remove OOO</button>
         </div>
       </div>
     </div>
 
     <div id="backupUnlockModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="backupUnlockModalTitle" aria-describedby="backupUnlockModalImpact">
       <div class="speed-bump-card backup-speed-bump-card">
-        <div class="speed-bump-icon backup-speed-bump-icon" aria-hidden="true">!</div>
         <div class="speed-bump-copy">
-          <p class="eyebrow">Backup tools</p>
-          <h2 id="backupUnlockModalTitle">Unlock backup changes?</h2>
+          <p class="eyebrow">Data tools</p>
+          <h2 id="backupUnlockModalTitle">Unlock data changes?</h2>
           <p id="backupUnlockModalImpact" class="speed-bump-impact backup-caution-callout">Proceed only if you know exactly what you are doing.</p>
           <ul class="backup-risk-list">
+            <li>Cleanup can remove old history based on the retention policy.</li>
             <li>Importing a file can overwrite the current scheduler data.</li>
             <li>Resetting sample data can remove the setup you are using now.</li>
           </ul>
         </div>
         <div class="speed-bump-actions">
           <button id="cancelBackupUnlockButton" class="secondary-button" type="button">Cancel</button>
-          <button id="confirmBackupUnlockButton" class="danger-button" type="button">I understand — unlock backup tools</button>
+          <button id="confirmBackupUnlockButton" class="danger-button" type="button">I understand — unlock data tools</button>
         </div>
       </div>
     </div>
 
     <div id="genericAlertModal" class="speed-bump-overlay hidden" role="alertdialog" aria-modal="true" aria-hidden="true" aria-labelledby="genericAlertModalTitle" aria-describedby="genericAlertModalMessage">
       <div class="speed-bump-card">
-        <div class="speed-bump-icon" aria-hidden="true">!</div>
         <div class="speed-bump-copy">
           <p class="eyebrow">Notice</p>
           <h2 id="genericAlertModalTitle">Notice</h2>
@@ -644,7 +649,6 @@
 
     <div id="genericConfirmModal" class="speed-bump-overlay hidden" role="alertdialog" aria-modal="true" aria-hidden="true" aria-labelledby="genericConfirmModalTitle" aria-describedby="genericConfirmModalMessage">
       <div class="speed-bump-card">
-        <div class="speed-bump-icon" aria-hidden="true">!</div>
         <div class="speed-bump-copy">
           <p class="eyebrow">Confirm</p>
           <h2 id="genericConfirmModalTitle">Are you sure?</h2>
@@ -659,12 +663,6 @@
 
     <div id="contactDevModal" class="speed-bump-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="contactDevModalTitle">
       <div class="speed-bump-card contact-speed-bump-card">
-        <div class="speed-bump-icon contact-speed-bump-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" focusable="false">
-            <path d="M4.75 6.75h14.5v10.5H4.75z" />
-            <path d="m5.25 7.25 6.75 5.5 6.75-5.5" />
-          </svg>
-        </div>
         <div class="speed-bump-copy">
           <p class="eyebrow">Contact</p>
           <h2 id="contactDevModalTitle">Developer contact</h2>
@@ -680,6 +678,7 @@
       </div>
     </div>
 
+    <script src="src/schedule-core.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

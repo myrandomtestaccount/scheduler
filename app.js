@@ -5,20 +5,54 @@ const DISPLAY_TIMEZONE_STORAGE_KEY = "smeScheduler.displayTimezone.v1";
 const SHARED_STATE_ENDPOINT = "/api/state";
 const SHARED_STATE_REFRESH_MS = 10000;
 const THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
-const EASTERN_TIME_ZONE = "America/New_York";
+const {
+  EASTERN_TIME_ZONE,
+  END_OF_DAY_TIME,
+  MAX_REGION_COVERAGE_MINUTES,
+  MAX_SCHEDULE_DURATION_MINUTES,
+  SLOT_MINUTES,
+  addDays,
+  compareDateTimeRecords,
+  compareDateTimeValues,
+  formatDate,
+  formatDisplayDate,
+  formatDurationMinutes,
+  formatWaitDuration,
+  getBusinessWeekRange,
+  getDateOffset,
+  getDayNameFromDate,
+  getTimeRangeDurationMinutes,
+  getTimezoneAbbreviation,
+  getWeekDates,
+  getZonedDateTimeParts,
+  isForwardDateRange,
+  isForwardDateTimeRange,
+  isForwardTimeRange,
+  isSameDayForwardEasternRange,
+  isValidDateInput,
+  isValidRegionCoverageTimeRange,
+  isValidScheduleTimeRange,
+  isValidTimeInput,
+  isValidTimeRange,
+  isValidTimeRangeWithinDuration,
+  isWithinWindow,
+  minutesToTime,
+  parseDate,
+  roundToNearestSlot,
+  toMinutes,
+  zonedWallTimeToDate
+} = window.ScheduleCore;
 const GLOBAL_HOLIDAY_USER_ID = "__all__";
 const REGION_HOLIDAY_USER_PREFIX = "__region_all__:";
 const SHIFT_TEMPLATE_SCOPE_SEPARATOR = "::";
+const OOO_TYPE_ALL_DAY = "all-day";
+const OOO_TYPE_TIME = "time";
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const SCHEDULE_DAYS = DAYS.slice(0, 5);
 const TIMELINE_START_MINUTES = 6 * 60;
 const TIMELINE_END_MINUTES = 22 * 60;
-const SLOT_MINUTES = 30;
-const MAX_SCHEDULE_DURATION_MINUTES = 12 * 60;
-const MAX_REGION_COVERAGE_MINUTES = 14 * 60;
 const SCHEDULE_GRAPH_PADDING_MINUTES = 60;
 const GLOBAL_SCHEDULE_GRAPH_DURATION_MINUTES = 26 * 60;
-const END_OF_DAY_TIME = "23:59";
 const RECENT_ASSIGNMENTS_WINDOW_MS = 24 * 60 * 60 * 1000;
 const LONG_FUTURE_ASSIGNMENT_MINUTES = 12 * 60;
 const SHIFT_ORDER_PRESET_ID = "schedule-first";
@@ -56,6 +90,13 @@ const DEFAULT_INCIDENT_CONFIG = {
     messageTemplate: DEFAULT_TEAMS_MESSAGE_TEMPLATE
   }
 };
+const RETENTION_POLICY_LIMITS = { min: 1, max: 3650 };
+const DEFAULT_RETENTION_POLICY = {
+  assignmentLogDays: 365,
+  oooDays: 180,
+  delegationDays: 365,
+  backupSnapshotDays: 90
+};
 const DEV_MODE_TIME_OPTION_ID = "__dev_mode__";
 const DEFAULT_DISPLAY_TIMEZONES = [
   { id: "et", timeZone: EASTERN_TIME_ZONE, label: "Eastern (New York)" },
@@ -90,33 +131,6 @@ const AVAILABLE_TIMEZONES = [
   { id: "auckland", timeZone: "Pacific/Auckland", label: "Auckland" },
   { id: "samoa", timeZone: "Pacific/Apia", label: "Samoa" }
 ];
-
-const TIMEZONE_ABBREVIATIONS = {
-  et: { "-300": "EST", "-240": "EDT" },
-  ct: { "-360": "CST", "-300": "CDT" },
-  mt: { "-420": "MST", "-360": "MDT" },
-  pt: { "-480": "PST", "-420": "PDT" },
-  ak: { "-540": "AKST", "-480": "AKDT" },
-  ht: { "-600": "HST" },
-  utc: { "0": "UTC" },
-  london: { "0": "GMT", "60": "BST" },
-  paris: { "60": "CET", "120": "CEST" },
-  athens: { "120": "EET", "180": "EEST" },
-  moscow: { "180": "MSK" },
-  istanbul: { "180": "TRT" },
-  dubai: { "240": "GST" },
-  karachi: { "300": "PKT" },
-  ist: { "330": "IST" },
-  dhaka: { "360": "BST" },
-  bangkok: { "420": "ICT" },
-  beijing: { "480": "CST/SGT" },
-  tokyo: { "540": "JST/KST" },
-  sydney: { "600": "AEST", "660": "AEDT" },
-  adelaide: { "570": "ACST", "630": "ACDT" },
-  perth: { "480": "AWST" },
-  auckland: { "720": "NZST", "780": "NZDT" },
-  samoa: { "780": "WST" }
-};
 
 const DEFAULT_REGIONS = [
   { id: "amer", name: "Americas", coverageStart: "07:00", coverageEnd: "19:00" },
@@ -439,44 +453,6 @@ function formatRegionCoverageWindow(regionId, date = getScheduleReferenceDate())
   return `${formatEasternTimeInputForDisplay(date, coverageWindow.start)}–${formatEasternTimeInputForDisplay(date, coverageWindow.end)} ${abbreviation}`;
 }
 
-function getTimeRangeDurationMinutes(start, end) {
-  if (!isValidTimeInput(start || "") || !isValidTimeInput(end || "")) {
-    return Number.POSITIVE_INFINITY;
-  }
-
-  const startMinutes = toMinutes(start);
-  const endMinutes = toMinutes(end);
-  const duration = endMinutes - startMinutes;
-  return duration > 0 ? duration : duration + 24 * 60;
-}
-
-function isValidScheduleTimeRange(start, end) {
-  return isValidTimeRangeWithinDuration(start, end, MAX_SCHEDULE_DURATION_MINUTES);
-}
-
-function isValidRegionCoverageTimeRange(start, end) {
-  return isValidTimeRangeWithinDuration(start, end, MAX_REGION_COVERAGE_MINUTES);
-}
-
-function isValidTimeRangeWithinDuration(start, end, maxDurationMinutes) {
-  const duration = getTimeRangeDurationMinutes(start, end);
-  return Number.isFinite(duration) && duration > 0 && duration <= maxDurationMinutes;
-}
-
-function formatDurationMinutes(totalMinutes) {
-  if (!Number.isFinite(totalMinutes)) {
-    return "Invalid duration";
-  }
-
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (minutes === 0) {
-    return `${hours}h`;
-  }
-
-  return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-}
-
 function createDefaultRegionShiftTemplates(regionId = GLOBAL_REGION_SCOPE_ID) {
   const region = getRegionById(regionId);
   if (!region) {
@@ -565,10 +541,15 @@ const defaultData = {
     "external-system": 0,
     "internal-api": 0
   },
+  queueBaselines: {
+    global: {},
+    regional: {}
+  },
   shiftTemplates: DEFAULT_SHIFT_TEMPLATES,
   assignmentRules: DEFAULT_ASSIGNMENT_RULES,
   displayTimezones: DEFAULT_DISPLAY_TIMEZONES,
   incidentConfig: DEFAULT_INCIDENT_CONFIG,
+  retentionPolicy: DEFAULT_RETENTION_POLICY,
   regions: DEFAULT_REGIONS,
   regionalSettings: {},
   delegationSlots: [],
@@ -616,6 +597,7 @@ let timelineDrag = null;
 const OTHER_ADMIN_TABS = ["rules", "users", "regions", "shifts", "systems", "timezones", "incidents", "data"];
 const REGION_SCOPED_ADMIN_TABS = new Set(["schedules", "users", "rules", "shifts", "systems", "holidays"]);
 const REGION_REQUIRED_ADMIN_TABS = new Set(["rules"]);
+const ADMIN_TABS_WITH_DRAFT_SAVE = new Set(["rules", "shifts", "incidents"]);
 const unlockedAdminTabs = new Set();
 let saveToastTimer = null;
 let activeAdminTabId = "schedules";
@@ -780,7 +762,13 @@ const elements = {
   systemsScopeMeta: document.querySelector("#systemsScopeMeta"),
   addHolidayForm: document.querySelector("#addHolidayForm"),
   holidayUserSelect: document.querySelector("#holidayUserSelect"),
+  holidayTypeSelect: document.querySelector("#holidayTypeSelect"),
   holidayDateInput: document.querySelector("#holidayDateInput"),
+  holidayTimeFields: document.querySelector("#holidayTimeFields"),
+  holidayStartLabel: document.querySelector("#holidayStartLabel"),
+  holidayEndLabel: document.querySelector("#holidayEndLabel"),
+  holidayStartInput: document.querySelector("#holidayStartInput"),
+  holidayEndInput: document.querySelector("#holidayEndInput"),
   holidayNameInput: document.querySelector("#holidayNameInput"),
   holidaysList: document.querySelector("#holidaysList"),
   incidentConfigForm: document.querySelector("#incidentConfigForm"),
@@ -803,6 +791,11 @@ const elements = {
   teamsWebhookUrlInput: document.querySelector("#teamsWebhookUrlInput"),
   teamsMessageFormatSelect: document.querySelector("#teamsMessageFormatSelect"),
   teamsMessageTemplateInput: document.querySelector("#teamsMessageTemplateInput"),
+  retentionPolicyForm: document.querySelector("#retentionPolicyForm"),
+  assignmentRetentionDaysInput: document.querySelector("#assignmentRetentionDaysInput"),
+  oooRetentionDaysInput: document.querySelector("#oooRetentionDaysInput"),
+  delegationRetentionDaysInput: document.querySelector("#delegationRetentionDaysInput"),
+  backupRetentionDaysInput: document.querySelector("#backupRetentionDaysInput"),
   exportButton: document.querySelector("#exportButton"),
   importInput: document.querySelector("#importInput"),
   resetButton: document.querySelector("#resetButton"),
@@ -986,6 +979,10 @@ function bindEvents() {
   on(elements.slotEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.addSystemForm, "submit", addSystem);
   on(elements.addHolidayForm, "submit", addHoliday);
+  on(elements.holidayTypeSelect, "change", renderHolidayFormMode);
+  on(elements.holidayDateInput, "change", renderAdminTimezoneLabels);
+  on(elements.holidayStartInput, "input", updateForwardTimeInputConstraints);
+  on(elements.holidayEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.incidentConfigForm, "submit", saveIncidentConfig);
   on(elements.incidentEnabledInput, "change", updateIncidentConfigControlState);
   on(elements.addServiceNowHiddenFieldButton, "click", addServiceNowHiddenField);
@@ -996,6 +993,7 @@ function bindEvents() {
   on(elements.addTimezoneForm, "submit", addTimezone);
   on(elements.shiftStartInput, "input", updateForwardTimeInputConstraints);
   on(elements.shiftEndInput, "input", updateForwardTimeInputConstraints);
+  on(elements.retentionPolicyForm, "submit", saveRetentionPolicy);
   on(elements.exportButton, "click", exportData);
   on(elements.importInput, "change", importData);
   on(elements.resetButton, "click", resetData);
@@ -1166,12 +1164,14 @@ function render() {
   renderRegions();
   renderUsers();
   renderSystems();
+  renderHolidayFormMode();
   renderHolidays();
   renderIncidentConfig();
   renderDelegationSlots();
   renderDelegations();
   renderTimelineTools();
   renderTimezoneAdmin();
+  renderRetentionPolicy();
   renderDataPreview();
   updateForwardTimeInputConstraints();
   renderDisplayTimezoneSelect();
@@ -1296,9 +1296,7 @@ function renderAdminRegionScopeCopy() {
 
 function getAdminRegionScopeHint(scopeLabel, coverageWindow) {
   const copy = {
-    schedules: selectedAdminRegionId
-      ? `Showing ${scopeLabel} schedules and graph. Graph timeline limits: ${coverageWindow}.`
-      : "",
+    schedules: "",
     users: selectedAdminRegionId
       ? ""
       : "Global team view: all users with regional breakdowns. Pick a region to manage only that region’s members.",
@@ -1309,9 +1307,7 @@ function getAdminRegionScopeHint(scopeLabel, coverageWindow) {
     systems: selectedAdminRegionId
       ? `Showing coverage systems attached to ${scopeLabel}. Coverage users come from this region’s team.`
       : "Global coverage view: all systems. Pick one or more regions on each system, or pick a region to manage its systems.",
-    holidays: selectedAdminRegionId
-      ? `Editing holidays for ${scopeLabel}. “All users” applies only to this region.`
-      : ""
+    holidays: ""
   };
 
   return copy[activeAdminTabId] || "";
@@ -1425,6 +1421,7 @@ function changeDisplayTimezone() {
   const scheduleFormTimes = captureScheduleFormTimes(previousTimezone);
   const slotFormTimes = captureSlotFormTimes(previousTimezone);
   const shiftAddFormTimes = captureShiftAddFormTimes(previousTimezone);
+  const holidayFormTimes = captureHolidayFormTimes(previousTimezone);
   const delegationFormTimes = captureDelegationFormTimes(previousTimezone);
   selectedDisplayTimezoneId = getDisplayTimezone(elements.displayTimezoneSelect.value).id;
   localStorage.setItem(DISPLAY_TIMEZONE_STORAGE_KEY, selectedDisplayTimezoneId);
@@ -1434,6 +1431,7 @@ function changeDisplayTimezone() {
   restoreScheduleFormTimes(scheduleFormTimes);
   restoreSlotFormTimes(slotFormTimes);
   restoreShiftAddFormTimes(shiftAddFormTimes);
+  restoreHolidayFormTimes(holidayFormTimes);
   restoreDelegationFormTimes(delegationFormTimes);
   updateForwardTimeInputConstraints();
   renderTimezoneSensitiveAdminViews();
@@ -1447,11 +1445,13 @@ function renderTimezoneSensitiveAdminViews() {
   renderTimelineTools();
   renderDelegationSlots();
   renderDelegations();
+  renderHolidays();
 }
 
 function renderAdminTimezoneLabels() {
   const abbreviation = getSelectedTimezoneAbbreviationForDate(getScheduleReferenceDate());
   const delegationAbbreviation = getSelectedTimezoneAbbreviationForDate(getDelegationReferenceDate());
+  const holidayAbbreviation = getSelectedTimezoneAbbreviationForDate(getHolidayReferenceDate());
   const labelMap = [
     [elements.scheduleDaysLegend, `Schedule days (${abbreviation})`],
     [elements.scheduleStartLabel, `Start ${abbreviation}`],
@@ -1459,6 +1459,8 @@ function renderAdminTimezoneLabels() {
     [elements.scheduleGraphTitle, `Schedule graph (${abbreviation})`],
     [elements.slotStartLabel, `Start ${abbreviation}`],
     [elements.slotEndLabel, `End ${abbreviation}`],
+    [elements.holidayStartLabel, `Start ${holidayAbbreviation}`],
+    [elements.holidayEndLabel, `End ${holidayAbbreviation}`],
     [elements.delegationStartLabel, `Start ${delegationAbbreviation}`],
     [elements.delegationEndLabel, `End ${delegationAbbreviation}`],
     [elements.shiftStartLabel, `Start ${abbreviation}`],
@@ -1557,6 +1559,12 @@ function initializeAdminTimeInputs() {
   if (elements.shiftEndInput) {
     elements.shiftEndInput.value = formatEasternTimeInputForDisplay(date, elements.shiftEndInput.value || "17:00");
   }
+  if (elements.holidayStartInput) {
+    elements.holidayStartInput.value = formatEasternTimeInputForDisplay(date, elements.holidayStartInput.value || "12:00");
+  }
+  if (elements.holidayEndInput) {
+    elements.holidayEndInput.value = formatEasternTimeInputForDisplay(date, elements.holidayEndInput.value || "12:30");
+  }
   const delegationDate = getDelegationReferenceDate();
   if (elements.delegationStartInput) {
     elements.delegationStartInput.value = formatEasternTimeInputForDisplay(delegationDate, elements.delegationStartInput.value || "09:00");
@@ -1643,6 +1651,32 @@ function restoreShiftAddFormTimes(times) {
   }
   if (elements.shiftEndInput) {
     elements.shiftEndInput.value = formatEasternTimeInputForDisplay(date, times.end);
+  }
+}
+
+function captureHolidayFormTimes(timezone) {
+  if (!elements.holidayStartInput || !elements.holidayEndInput) {
+    return null;
+  }
+
+  const date = getHolidayReferenceDate();
+  return {
+    start: convertDisplayDateTimeToEastern(date, elements.holidayStartInput.value, timezone).time,
+    end: convertDisplayDateTimeToEastern(date, elements.holidayEndInput.value, timezone).time
+  };
+}
+
+function restoreHolidayFormTimes(times) {
+  if (!times) {
+    return;
+  }
+
+  const date = getHolidayReferenceDate();
+  if (elements.holidayStartInput) {
+    elements.holidayStartInput.value = formatEasternTimeInputForDisplay(date, times.start);
+  }
+  if (elements.holidayEndInput) {
+    elements.holidayEndInput.value = formatEasternTimeInputForDisplay(date, times.end);
   }
 }
 
@@ -2136,7 +2170,7 @@ function renderShiftRegionBoundaryEditor(region, date, abbreviation) {
         <span>End ${escapeHtml(abbreviation)}</span>
         <input type="time" value="${escapeHtml(formatEasternTimeInputForDisplay(date, coverageWindow.end))}" data-shift-region-coverage-end="${escapeHtml(region.id)}">
       </label>
-      <button class="small-button" type="button" data-action="update-shift-region-coverage" data-region-id="${escapeHtml(region.id)}">Update</button>
+      <button class="small-button" type="button" data-action="update-shift-region-coverage" data-region-id="${escapeHtml(region.id)}">Save</button>
     </div>
   `;
 }
@@ -2170,7 +2204,7 @@ function renderShiftTemplateRow(template, regionId, date, abbreviation) {
         <div class="meta shift-duration-label">${escapeHtml(durationLabel)}</div>
       </div>
       <div class="item-actions shift-row-actions">
-        <button class="small-button" type="button" data-action="update-shift" data-shift-id="${escapeHtml(template.id)}" data-region-id="${escapeHtml(normalizedRegionId)}">Update</button>
+        <button class="small-button" type="button" data-action="update-shift" data-shift-id="${escapeHtml(template.id)}" data-region-id="${escapeHtml(normalizedRegionId)}">Save</button>
         <button class="remove-button" type="button" data-action="remove-shift" data-shift-id="${escapeHtml(template.id)}" data-region-id="${escapeHtml(normalizedRegionId)}">Remove</button>
       </div>
     </div>
@@ -2233,6 +2267,131 @@ function resetShiftAddForm() {
   updateForwardTimeInputConstraints();
 }
 
+function saveShiftsTabChanges() {
+  if (!isAdminTabUnlocked("shifts")) {
+    return;
+  }
+
+  const drafts = collectVisibleShiftDrafts();
+  if (!drafts) {
+    return;
+  }
+
+  applyShiftDrafts(drafts);
+  if (isShiftAddFormDirty()) {
+    submitForm(elements.addShiftForm);
+    return;
+  }
+
+  completeAdminSave("Shifts saved.", "shifts");
+}
+
+function isShiftAddFormDirty() {
+  if (!shiftAddFormOpen || !elements.addShiftForm || elements.addShiftForm.classList.contains("hidden")) {
+    return false;
+  }
+
+  const date = getScheduleReferenceDate();
+  const defaultStart = formatEasternTimeInputForDisplay(date, "09:00");
+  const defaultEnd = formatEasternTimeInputForDisplay(date, "17:00");
+  return Boolean(elements.shiftNameInput?.value.trim())
+    || (elements.shiftStartInput?.value && elements.shiftStartInput.value !== defaultStart)
+    || (elements.shiftEndInput?.value && elements.shiftEndInput.value !== defaultEnd);
+}
+
+function collectVisibleShiftDrafts() {
+  if (!elements.shiftsList) {
+    return [];
+  }
+
+  const date = getScheduleReferenceDate();
+  const drafts = [];
+  const coverageEditors = [...elements.shiftsList.querySelectorAll(".shift-region-boundary-editor")];
+  for (const editor of coverageEditors) {
+    const startInput = editor.querySelector("[data-shift-region-coverage-start]");
+    const endInput = editor.querySelector("[data-shift-region-coverage-end]");
+    const regionId = startInput?.dataset.shiftRegionCoverageStart || endInput?.dataset.shiftRegionCoverageEnd;
+    const displayStart = startInput?.value || "";
+    const displayEnd = endInput?.value || "";
+    if (!regionId) {
+      continue;
+    }
+    if (!isValidRegionCoverageTimeRange(displayStart, displayEnd)) {
+      showGenericAlert("Invalid region hours", "Region hours must be more than 0 minutes and no more than 14 hours. Overnight windows are allowed.");
+      return null;
+    }
+
+    const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
+    const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
+    if (!isValidRegionCoverageTimeRange(convertedStart.time, convertedEnd.time)) {
+      showGenericAlert("Invalid region hours", "Region hours must be more than 0 minutes and no more than 14 hours in Eastern Time.");
+      return null;
+    }
+
+    drafts.push({
+      type: "region-coverage",
+      regionId,
+      start: convertedStart.time,
+      end: convertedEnd.time
+    });
+  }
+
+  const shiftRows = [...elements.shiftsList.querySelectorAll(".shift-row")];
+  for (const row of shiftRows) {
+    const shiftId = row.dataset.shiftId;
+    const regionId = normalizeRegionScopeId(row.dataset.regionId);
+    const template = getScopedShiftTemplates(regionId).find((item) => item.id === shiftId);
+    if (!template) {
+      continue;
+    }
+
+    const name = row.querySelector(".shift-name-field")?.value.trim() || "";
+    const displayStart = row.querySelector(".shift-start-field")?.value || "";
+    const displayEnd = row.querySelector(".shift-end-field")?.value || "";
+    const maxDurationMinutes = getShiftTemplateMaxDurationMinutes(template, regionId);
+    const maxDurationLabel = formatDurationMinutes(maxDurationMinutes);
+    if (!name || !isValidTimeRangeWithinDuration(displayStart, displayEnd, maxDurationMinutes)) {
+      showGenericAlert("Invalid shift", `Shifts need a name and a duration of ${maxDurationLabel} or less. Overnight shifts are allowed.`);
+      return null;
+    }
+
+    const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
+    const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
+    if (!isValidTimeRangeWithinDuration(convertedStart.time, convertedEnd.time, maxDurationMinutes)) {
+      showGenericAlert("Invalid shift", `Shift times must be ${maxDurationLabel} or less in Eastern Time.`);
+      return null;
+    }
+
+    drafts.push({
+      type: "shift",
+      template,
+      name,
+      start: convertedStart.time,
+      end: convertedEnd.time
+    });
+  }
+
+  return drafts;
+}
+
+function applyShiftDrafts(drafts) {
+  drafts.forEach((draft) => {
+    if (draft.type === "region-coverage") {
+      const region = getRegionById(draft.regionId);
+      if (region) {
+        region.coverageStart = draft.start;
+        region.coverageEnd = draft.end;
+        syncRegionCoverageShift(region.id);
+      }
+      return;
+    }
+
+    draft.template.name = draft.name;
+    draft.template.start = draft.start;
+    draft.template.end = draft.end;
+  });
+}
+
 function renderAssignmentRules() {
   if (!elements.assignmentPolicyDescriptions) {
     return;
@@ -2284,6 +2443,13 @@ function renderAdminLocks() {
   document.querySelectorAll("[data-lockable-admin-tab]").forEach((panel) => {
     const tabName = panel.dataset.lockableAdminTab;
     const unlocked = unlockedAdminTabs.has(tabName);
+    const saveButton = ADMIN_TABS_WITH_DRAFT_SAVE.has(tabName)
+      ? `
+        <button class="${unlocked ? "primary-button" : "secondary-button"} admin-save-button" type="button" data-lock-action="save" data-tab="${escapeHtml(tabName)}">
+          Save changes
+        </button>
+      `
+      : "";
     let lockBar = panel.querySelector(".admin-lock-bar");
     if (!lockBar) {
       lockBar = document.createElement("div");
@@ -2296,9 +2462,7 @@ function renderAdminLocks() {
         <strong>${unlocked ? "Editing unlocked" : "Editing locked"}</strong>
       </div>
       <div class="admin-lock-actions">
-        <button class="secondary-button" type="button" data-lock-action="save" data-tab="${escapeHtml(tabName)}">
-          Save
-        </button>
+        ${saveButton}
         <button class="${unlocked ? "secondary-button" : "primary-button"}" type="button" data-lock-action="${unlocked ? "lock" : "unlock"}" data-tab="${escapeHtml(tabName)}">
           ${unlocked ? "Lock" : "Unlock changes"}
         </button>
@@ -2340,6 +2504,9 @@ function handleAdminLockAction(event) {
 
   const tabName = button.dataset.tab;
   if (button.dataset.lockAction === "save") {
+    if (saveAdminTabChanges(tabName)) {
+      return;
+    }
     completeDataSave("Saved.", { showToast: true });
     return;
   }
@@ -2355,6 +2522,36 @@ function handleAdminLockAction(event) {
   }
 
   renderAdminLocks();
+}
+
+function saveAdminTabChanges(tabName) {
+  if (tabName === "shifts") {
+    saveShiftsTabChanges();
+    return true;
+  }
+
+  if (tabName === "rules") {
+    return submitForm(elements.assignmentRulesForm);
+  }
+
+  if (tabName === "incidents") {
+    return submitForm(elements.incidentConfigForm);
+  }
+
+  return false;
+}
+
+function submitForm(form) {
+  if (!form) {
+    return false;
+  }
+
+  if (typeof form.requestSubmit === "function") {
+    form.requestSubmit();
+  } else {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  }
+  return true;
 }
 
 function openBackupUnlockModal() {
@@ -3626,7 +3823,7 @@ function getGraphBlocksForUser(user, date, day) {
       date,
       graphStartMinutes: graphRange.start,
       graphEndMinutes: graphRange.end,
-      label: holidays.map((holiday) => holiday.name || "Holiday").join(", ")
+      label: holidays.map((holiday) => holiday.name || "OOO").join(", ")
     }];
   }
 
@@ -3674,7 +3871,22 @@ function getGraphBlocksForUser(user, date, day) {
     }))
     .filter((block) => isGraphBlockVisible(block));
 
-  return scheduleBlocks.concat(extraBlocks, breakBlocks).sort(compareGraphBlocks);
+  const oooBreakBlocks = sourceDates
+    .flatMap((sourceDate) => getTimedOooBlocksForUser(user.id, sourceDate, selectedAdminRegionId))
+    .map((holiday) => ({
+      type: "break",
+      id: holiday.id,
+      source: "ooo",
+      userId: user.id,
+      date,
+      sourceDate: holiday.date,
+      start: holiday.start,
+      end: holiday.end,
+      label: holiday.name || "OOO"
+    }))
+    .filter((block) => isGraphBlockVisible(block));
+
+  return scheduleBlocks.concat(extraBlocks, breakBlocks, oooBreakBlocks).sort(compareGraphBlocks);
 }
 
 function getGraphScheduleBlocksForDate(user, date, day = getDayNameFromDate(date)) {
@@ -3944,6 +4156,18 @@ function renderSystems() {
   });
 }
 
+function renderHolidayFormMode() {
+  const isTimedBlock = elements.holidayTypeSelect?.value === OOO_TYPE_TIME;
+  elements.holidayTimeFields?.classList.toggle("hidden", !isTimedBlock);
+  [elements.holidayStartInput, elements.holidayEndInput].forEach((input) => {
+    if (input) {
+      input.required = isTimedBlock;
+      input.disabled = !isTimedBlock || !isAdminTabUnlocked("holidays");
+    }
+  });
+  updateForwardTimeInputConstraints();
+}
+
 function renderHolidays() {
   if (!elements.holidaysList) {
     return;
@@ -3958,22 +4182,22 @@ function renderHolidays() {
     const individualRows = renderHolidayRows(
       getGlobalIndividualHolidaysForRegion(selectedAdminRegionId),
       GLOBAL_REGION_SCOPE_ID,
-      "Individual holidays"
+      "Individual OOO"
     );
     const regionRows = renderHolidayRows(
       getScopedHolidays(selectedAdminRegionId),
       selectedAdminRegionId,
-      `${getRegionScopeLabel(selectedAdminRegionId)} holidays`
+      `${getRegionScopeLabel(selectedAdminRegionId)} OOO`
     );
     elements.holidaysList.innerHTML = individualRows || regionRows
       ? `${individualRows}${regionRows}`
-      : emptyState("No holidays yet.");
+      : emptyState("No OOO yet.");
     bindHolidayRemoveButtons();
     return;
   }
 
   elements.holidaysList.innerHTML = renderHolidayRows(getScopedHolidays(selectedAdminRegionId), selectedAdminRegionId)
-    || emptyState("No holidays yet.");
+    || emptyState("No OOO yet.");
   bindHolidayRemoveButtons();
 }
 
@@ -3981,30 +4205,30 @@ function renderHolidayOverview() {
   const individualRows = renderHolidayRows(
     getGlobalIndividualHolidays(),
     GLOBAL_REGION_SCOPE_ID,
-    "Individual holidays"
+    "Individual OOO"
   );
   const regionRows = data.regions
-    .map((region) => renderHolidayRows(getScopedHolidays(region.id), region.id, `${region.name} holidays`))
+    .map((region) => renderHolidayRows(getScopedHolidays(region.id), region.id, `${region.name} OOO`))
     .filter(Boolean)
     .join("");
 
   elements.holidaysList.innerHTML = individualRows || regionRows
     ? `${individualRows}${regionRows}`
-    : emptyState("No holidays yet.");
+    : emptyState("No OOO yet.");
   bindHolidayRemoveButtons();
 }
 
 function renderHolidayRows(holidays, regionId = selectedAdminRegionId, heading = "") {
   const rows = holidays
     .slice()
-    .sort((left, right) => left.date.localeCompare(right.date))
+    .sort(compareOooRecords)
     .map((holiday) => {
       const userName = getHolidayUserName(holiday, regionId);
       return `
         <div class="list-item">
           <div>
             <div class="item-title">${escapeHtml(userName)}</div>
-            <div class="meta">${escapeHtml(formatHolidayDate(holiday.date))} · ${escapeHtml(holiday.name || "Holiday")}</div>
+            <div class="meta">${escapeHtml(formatOooRecordLabel(holiday))}</div>
           </div>
           <button class="remove-button" type="button" data-action="remove-holiday" data-holiday-id="${escapeHtml(holiday.id)}" data-region-id="${escapeHtml(regionId || GLOBAL_REGION_SCOPE_ID)}">Remove</button>
         </div>
@@ -4315,6 +4539,42 @@ function renderDataPreview() {
   elements.dataPreview.value = JSON.stringify(data, null, 2);
 }
 
+function renderRetentionPolicy() {
+  const policy = getRetentionPolicy();
+  setRetentionInputValue(elements.assignmentRetentionDaysInput, policy.assignmentLogDays);
+  setRetentionInputValue(elements.oooRetentionDaysInput, policy.oooDays);
+  setRetentionInputValue(elements.delegationRetentionDaysInput, policy.delegationDays);
+  setRetentionInputValue(elements.backupRetentionDaysInput, policy.backupSnapshotDays);
+}
+
+function setRetentionInputValue(input, value) {
+  if (!input || document.activeElement === input) {
+    return;
+  }
+
+  input.value = String(value);
+}
+
+function saveRetentionPolicy(event) {
+  event.preventDefault();
+  if (!isAdminTabUnlocked("data")) {
+    return;
+  }
+
+  data.retentionPolicy = readRetentionPolicyForm();
+  completeAdminSave("Policy saved and old records cleaned.", "data");
+}
+
+function readRetentionPolicyForm() {
+  const current = getRetentionPolicy();
+  return normalizeRetentionPolicy({
+    assignmentLogDays: elements.assignmentRetentionDaysInput?.value || current.assignmentLogDays,
+    oooDays: elements.oooRetentionDaysInput?.value || current.oooDays,
+    delegationDays: elements.delegationRetentionDaysInput?.value || current.delegationDays,
+    backupSnapshotDays: elements.backupRetentionDaysInput?.value || current.backupSnapshotDays
+  });
+}
+
 function renderIncidentConfig() {
   if (!elements.incidentConfigForm) {
     return;
@@ -4608,7 +4868,7 @@ function updateShiftTemplate(shiftId, regionId = selectedAdminRegionId) {
       syncRegionCoverageShift(region.id);
     }
   }
-  completeAdminSave("Shift saved.");
+  completeAdminSave("Shift saved.", "shifts");
 }
 
 function removeShiftTemplate(shiftId, regionId = selectedAdminRegionId) {
@@ -5008,7 +5268,7 @@ function getRemoveUserImpactText(user) {
   const impact = [
     `${scheduleCount} schedule${scheduleCount === 1 ? "" : "s"}`,
     `${slotCount} break/extra slot${slotCount === 1 ? "" : "s"}`,
-    `${holidayCount} holiday${holidayCount === 1 ? "" : "s"}`,
+    `${holidayCount} OOO block${holidayCount === 1 ? "" : "s"}`,
     `${coverageCount} coverage mapping${coverageCount === 1 ? "" : "s"}`
   ].join(", ");
 
@@ -6122,8 +6382,8 @@ function getDelegatorAssignmentEligibility(user, slot, date) {
 
   const holidays = getHolidaysForUser(user.id, date);
   if (holidays.length > 0) {
-    const holidayLabel = holidays.map((holiday) => holiday.name || "Holiday").join(", ");
-    return { selectable: false, reason: `Holiday: ${holidayLabel}` };
+    const holidayLabel = holidays.map((holiday) => holiday.name || "OOO").join(", ");
+    return { selectable: false, reason: `OOO: ${holidayLabel}` };
   }
 
   const windows = getScheduleWindowsForDate(user, date, getDayNameFromDate(date));
@@ -6137,7 +6397,7 @@ function getDelegatorAssignmentEligibility(user, slot, date) {
   if (overlappingBreak) {
     return {
       selectable: false,
-      reason: `Break ${formatTimeRangeForDisplay(date, overlappingBreak.start, overlappingBreak.end, EASTERN_TIME_ZONE)} overlaps this slot`
+      reason: `OOO ${formatTimeRangeForDisplay(date, overlappingBreak.start, overlappingBreak.end, EASTERN_TIME_ZONE)} overlaps this slot`
     };
   }
 
@@ -6181,13 +6441,18 @@ function formatDelegatorScheduleCoverageReason(windows, date) {
 }
 
 function getDelegatorOverlappingBreak(user, slot, date) {
-  return data.exceptions.find((exception) => (
+  const regularBreak = data.exceptions.find((exception) => (
     exception.userId === user.id
       && exception.date === date
       && exception.type === "break"
       && isValidTimeRange(exception.start, exception.end)
       && delegationSlotsOverlap(exception, slot)
-  )) || null;
+  ));
+  if (regularBreak) {
+    return regularBreak;
+  }
+
+  return getTimedOooBlocksForUser(user.id, date).find((oooBlock) => delegationSlotsOverlap(oooBlock, slot)) || null;
 }
 
 function formatDelegatorUnavailableMessage({ slot, date, user, eligibility }) {
@@ -6477,26 +6742,48 @@ function addHoliday(event) {
   }
 
   if (!elements.holidayDateInput.value) {
-    showGenericAlert("Missing date", "Choose a holiday date.");
+    showGenericAlert("Missing date", "Choose an OOO date.");
     return;
   }
 
   const holidayTarget = getHolidayTargetFromSelectValue(elements.holidayUserSelect.value);
   if (!holidayTarget) {
-    showGenericAlert("Missing user", "Choose a specific user, or pick a region before adding a holiday for all users.");
+    showGenericAlert("Missing user", "Choose a specific user, or pick a region before adding OOO for all users.");
     return;
   }
 
+  const oooType = elements.holidayTypeSelect?.value === OOO_TYPE_TIME ? OOO_TYPE_TIME : OOO_TYPE_ALL_DAY;
+  const name = elements.holidayNameInput.value.trim() || "OOO";
   const holiday = {
     id: makeRecordId("holiday"),
     userId: holidayTarget.userId,
     date: elements.holidayDateInput.value,
-    name: elements.holidayNameInput.value.trim() || "Holiday"
+    name,
+    type: oooType
   };
+  if (oooType === OOO_TYPE_TIME) {
+    const displayStart = elements.holidayStartInput?.value || "";
+    const displayEnd = elements.holidayEndInput?.value || "";
+    if (!isForwardTimeRange(displayStart, displayEnd)) {
+      showGenericAlert("Invalid time", "OOO start time must be earlier than end time.");
+      return;
+    }
+
+    const start = convertDisplayDateTimeToEastern(elements.holidayDateInput.value, displayStart);
+    const end = convertDisplayDateTimeToEastern(elements.holidayDateInput.value, displayEnd);
+    if (!isSameDayForwardEasternRange(start, end)) {
+      showGenericAlert("Invalid time", "OOO time blocks must stay older-to-newer on the same Eastern day.");
+      return;
+    }
+
+    holiday.date = start.date;
+    holiday.start = start.time;
+    holiday.end = end.time;
+  }
   getHolidayTargetList(holidayTarget).push(holiday);
 
   elements.holidayNameInput.value = "";
-  completeAdminSave("Holiday saved.");
+  completeAdminSave("OOO saved.");
 }
 
 function removeHoliday(holidayId, regionId = selectedAdminRegionId) {
@@ -6522,14 +6809,14 @@ function openRemoveHolidayModal(holiday, regionId = selectedAdminRegionId) {
   pendingRemoveHolidayId = holiday.id;
   pendingRemoveHolidayRegionId = normalizeRegionScopeId(regionId);
   if (elements.removeHolidayModalName) {
-    elements.removeHolidayModalName.textContent = `${holiday.name || "Holiday"} · ${formatHolidayDate(holiday.date)}`;
+    elements.removeHolidayModalName.textContent = formatOooRecordLabel(holiday);
   }
   if (elements.removeHolidayModalImpact) {
     const userName = getHolidayUserName(holiday, regionId);
     const scopeText = holiday.userId === GLOBAL_HOLIDAY_USER_ID
       ? userName.toLowerCase()
       : userName;
-    elements.removeHolidayModalImpact.textContent = `This removes the holiday for ${scopeText}. Queue availability will update immediately.`;
+    elements.removeHolidayModalImpact.textContent = `This removes the OOO block for ${scopeText}. Availability will update immediately.`;
   }
 
   elements.removeHolidayModal.classList.remove("hidden");
@@ -6563,7 +6850,7 @@ function confirmRemoveHoliday() {
 function performRemoveHoliday(holidayId, regionId = selectedAdminRegionId) {
   const normalizedRegionId = normalizeRegionScopeId(regionId);
   setScopedHolidays(normalizedRegionId, getScopedHolidays(normalizedRegionId).filter((holiday) => holiday.id !== holidayId));
-  completeAdminSave("Holiday removed.");
+  completeAdminSave("OOO removed.");
 }
 
 function getHolidayTargetFromSelectValue(value) {
@@ -6611,6 +6898,46 @@ function getHolidayUserName(holiday, regionId = selectedAdminRegionId) {
 
 function formatHolidayDate(date) {
   return isValidDateInput(date || "") ? formatDisplayDate(date) : date || "No date";
+}
+
+function getOooType(record) {
+  return isTimedOooRecord(record) ? OOO_TYPE_TIME : OOO_TYPE_ALL_DAY;
+}
+
+function isTimedOooRecord(record) {
+  if (record?.type === OOO_TYPE_ALL_DAY) {
+    return false;
+  }
+
+  return record?.type === OOO_TYPE_TIME
+    || record?.allDay === false
+    || (isValidTimeInput(record?.start || "") && isValidTimeInput(record?.end || ""));
+}
+
+function isAllDayOooRecord(record) {
+  return !isTimedOooRecord(record);
+}
+
+function formatOooRecordLabel(record) {
+  const name = record.name || "OOO";
+  if (isTimedOooRecord(record)) {
+    const displayDate = getZonedDateTimeParts(
+      zonedWallTimeToDate(record.date, record.start, EASTERN_TIME_ZONE),
+      getSelectedDisplayTimezone().timeZone
+    ).date;
+    const abbreviation = getSelectedTimezoneAbbreviationForEasternTime(record.date, record.start);
+    const start = formatEasternTimeInputForDisplay(record.date, record.start);
+    const end = formatEasternTimeInputForDisplay(record.date, record.end);
+    return `${formatHolidayDate(displayDate)} · ${start}–${end} ${abbreviation} · ${name}`;
+  }
+
+  return `${formatHolidayDate(record.date)} · All day · ${name}`;
+}
+
+function compareOooRecords(left, right) {
+  return (left.date || "").localeCompare(right.date || "")
+    || toMinutes(left.start || "00:00") - toMinutes(right.start || "00:00")
+    || (left.name || "").localeCompare(right.name || "");
 }
 
 function markSelectedAssigned(options = {}) {
@@ -6951,11 +7278,6 @@ function getAvailabilityWaitMinutes(referenceNow, effectiveNow, status) {
   return Math.max(0, minutesUntilAvailable);
 }
 
-function getDateOffset(startDate, endDate) {
-  const millisecondsPerDay = 24 * 60 * 60 * 1000;
-  return Math.round((parseDate(endDate).getTime() - parseDate(startDate).getTime()) / millisecondsPerDay);
-}
-
 function isBusinessDay(date) {
   const day = getDayNameFromDate(date);
   return day !== "Saturday" && day !== "Sunday";
@@ -7136,16 +7458,17 @@ function getUserStatus(user, easternNow, regionId = GLOBAL_REGION_SCOPE_ID) {
   if (holidayMatches.length > 0) {
     return {
       status: "holiday",
-      badge: "Holiday",
+      badge: "OOO",
       selectable: false,
       availabilityStart: Number.POSITIVE_INFINITY,
-      message: `Holiday today: ${holidayMatches.map((holiday) => holiday.name || "Holiday").join(", ")}.`
+      message: `OOO today: ${holidayMatches.map((holiday) => holiday.name || "OOO").join(", ")}.`
     };
   }
 
   const windows = getScheduleWindowsForDate(user, easternNow.date, easternNow.day);
   const breaks = data.exceptions
     .filter((slot) => slot.userId === user.id && slot.date === easternNow.date && slot.type === "break")
+    .concat(getTimedOooBlocksForUser(user.id, easternNow.date, regionId))
     .map((slot) => ({ ...slot, startMinutes: toMinutes(slot.start), endMinutes: toMinutes(slot.end) }))
     .sort((left, right) => left.startMinutes - right.startMinutes);
 
@@ -7156,10 +7479,10 @@ function getUserStatus(user, easternNow, regionId = GLOBAL_REGION_SCOPE_ID) {
       const nextStartDisplay = formatEasternTimeForDisplay(easternNow.date, minutesToTime(nextStart));
       return {
         status: "later",
-        badge: "On break",
+        badge: "OOO",
         selectable: true,
         availabilityStart: nextStart,
-        message: `Currently on break${currentBreak.reason ? ` (${currentBreak.reason})` : ""}. Back at ${nextStartDisplay}. You can pick them anyway.`
+        message: `Currently OOO${currentBreak.name || currentBreak.reason ? ` (${currentBreak.name || currentBreak.reason})` : ""}. Back at ${nextStartDisplay}. You can pick them anyway.`
       };
     }
   }
@@ -7346,25 +7669,35 @@ function findNextAvailableStart(currentMinutes, windows, breaks) {
 }
 
 function getHolidaysForUser(userId, date, regionId = GLOBAL_REGION_SCOPE_ID) {
-  const holidays = [];
-  holidays.push(...getGlobalIndividualHolidays().filter((holiday) => holiday.date === date && holiday.userId === userId));
+  return getOooRecordsForUser(userId, date, regionId).filter(isAllDayOooRecord);
+}
+
+function getTimedOooBlocksForUser(userId, date, regionId = GLOBAL_REGION_SCOPE_ID) {
+  return getOooRecordsForUser(userId, date, regionId)
+    .filter(isTimedOooRecord)
+    .filter((holiday) => isValidTimeInput(holiday.start || "") && isValidTimeRange(holiday.start, holiday.end));
+}
+
+function getOooRecordsForUser(userId, date, regionId = GLOBAL_REGION_SCOPE_ID) {
+  const oooRecords = [];
+  oooRecords.push(...getGlobalIndividualHolidays().filter((holiday) => holiday.date === date && holiday.userId === userId));
 
   const normalizedRegionId = normalizeRegionScopeId(regionId);
   if (normalizedRegionId) {
-    holidays.push(...getRegionHolidayMatchesForUser(userId, date, normalizedRegionId));
+    oooRecords.push(...getRegionHolidayMatchesForUser(userId, date, normalizedRegionId));
   } else if (areRegionsEnabled()) {
     const user = getUserFromReference(userId);
     (user?.regionIds || []).forEach((userRegionId) => {
-      holidays.push(...getRegionHolidayMatchesForUser(userId, date, userRegionId));
+      oooRecords.push(...getRegionHolidayMatchesForUser(userId, date, userRegionId));
     });
   } else {
-    holidays.push(...data.holidays.filter((holiday) => (
+    oooRecords.push(...data.holidays.filter((holiday) => (
       holiday.date === date
         && holiday.userId === GLOBAL_HOLIDAY_USER_ID
     )));
   }
 
-  return dedupeHolidays(holidays);
+  return dedupeHolidays(oooRecords);
 }
 
 function getRegionHolidayMatchesForUser(userId, date, regionId) {
@@ -7386,7 +7719,7 @@ function getGlobalIndividualHolidaysForRegion(regionId) {
 function dedupeHolidays(holidays) {
   const seen = new Set();
   return holidays.filter((holiday) => {
-    const key = `${holiday.userId}:${holiday.date}:${holiday.name || "Holiday"}`;
+    const key = `${holiday.userId}:${holiday.date}:${getOooType(holiday)}:${holiday.start || ""}:${holiday.end || ""}:${holiday.name || "OOO"}`;
     if (seen.has(key)) {
       return false;
     }
@@ -7857,6 +8190,110 @@ function validateData(candidate) {
   });
 }
 
+function getRetentionPolicy() {
+  return normalizeRetentionPolicy(data?.retentionPolicy);
+}
+
+function normalizeRetentionPolicy(policy) {
+  const source = policy && typeof policy === "object" ? policy : {};
+  return {
+    assignmentLogDays: normalizeRetentionDayCount(
+      source.assignmentLogDays ?? source.assignmentHistoryDays ?? source.ticketHistoryDays,
+      DEFAULT_RETENTION_POLICY.assignmentLogDays
+    ),
+    oooDays: normalizeRetentionDayCount(
+      source.oooDays ?? source.holidayDays ?? source.exceptionDays,
+      DEFAULT_RETENTION_POLICY.oooDays
+    ),
+    delegationDays: normalizeRetentionDayCount(
+      source.delegationDays ?? source.delegationHistoryDays,
+      DEFAULT_RETENTION_POLICY.delegationDays
+    ),
+    backupSnapshotDays: normalizeRetentionDayCount(
+      source.backupSnapshotDays ?? source.backupDays ?? source.snapshotDays,
+      DEFAULT_RETENTION_POLICY.backupSnapshotDays
+    )
+  };
+}
+
+function normalizeRetentionDayCount(value, fallback) {
+  const parsedValue = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsedValue)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(parsedValue, RETENTION_POLICY_LIMITS.min), RETENTION_POLICY_LIMITS.max);
+}
+
+function applyRetentionPolicy(referenceDate = getRetentionReferenceDate()) {
+  const policy = getRetentionPolicy();
+  const assignmentCutoffDate = getRetentionCutoffDate(policy.assignmentLogDays, referenceDate);
+  const assignmentPartition = partitionRecordsByRetention(
+    data.assignmentLog,
+    assignmentCutoffDate,
+    getAssignmentEntryDate
+  );
+  if (assignmentPartition.pruned.length > 0) {
+    data.queueBaselines = buildQueuePositionsFromAssignmentLog(assignmentPartition.pruned, data.queueBaselines);
+    data.assignmentLog = assignmentPartition.retained;
+  }
+
+  const oooCutoffDate = getRetentionCutoffDate(policy.oooDays, referenceDate);
+  const exceptionPartition = partitionRecordsByRetention(data.exceptions, oooCutoffDate, (slot) => slot.date || slot.startDate);
+  data.exceptions = exceptionPartition.retained;
+  const globalOooPartition = partitionRecordsByRetention(data.holidays, oooCutoffDate, (holiday) => holiday.date);
+  data.holidays = globalOooPartition.retained;
+  Object.values(data.regionalSettings || {}).forEach((settings) => {
+    if (!settings || typeof settings !== "object") {
+      return;
+    }
+
+    const scopedOooPartition = partitionRecordsByRetention(settings.holidays, oooCutoffDate, (holiday) => holiday.date);
+    settings.holidays = scopedOooPartition.retained;
+  });
+
+  const delegationCutoffDate = getRetentionCutoffDate(policy.delegationDays, referenceDate);
+  const delegationPartition = partitionRecordsByRetention(data.delegations, delegationCutoffDate, (delegation) => delegation.date);
+  data.delegations = delegationPartition.retained;
+
+  return {
+    assignmentLogPruned: assignmentPartition.pruned.length,
+    exceptionsPruned: exceptionPartition.pruned.length,
+    globalOooPruned: globalOooPartition.pruned.length,
+    delegationsPruned: delegationPartition.pruned.length
+  };
+}
+
+function getRetentionReferenceDate() {
+  return getLiveEasternNow().date;
+}
+
+function getRetentionCutoffDate(days, referenceDate) {
+  const normalizedReferenceDate = isValidDateInput(referenceDate || "")
+    ? referenceDate
+    : getLiveEasternNow().date;
+  return formatDate(addDays(parseDate(normalizedReferenceDate), -normalizeRetentionDayCount(days, DEFAULT_RETENTION_POLICY.assignmentLogDays)));
+}
+
+function partitionRecordsByRetention(records, cutoffDate, getRecordDate) {
+  const retained = [];
+  const pruned = [];
+  (Array.isArray(records) ? records : []).forEach((record) => {
+    const recordDate = getRecordDate(record);
+    if (shouldKeepRecordForRetention(recordDate, cutoffDate)) {
+      retained.push(record);
+    } else {
+      pruned.push(record);
+    }
+  });
+
+  return { retained, pruned };
+}
+
+function shouldKeepRecordForRetention(recordDate, cutoffDate) {
+  return !isValidDateInput(recordDate || "") || recordDate >= cutoffDate;
+}
+
 function normalizeAssignmentRulesConfig(config) {
   const source = config && typeof config === "object" ? config : DEFAULT_ASSIGNMENT_RULES;
   return {
@@ -7886,9 +8323,17 @@ function normalizeHolidayRecords(holidays) {
   normalizedHolidays.forEach((holiday) => {
     holiday.id ||= makeRecordId("holiday");
     holiday.userId ||= GLOBAL_HOLIDAY_USER_ID;
-    holiday.name ||= "Holiday";
+    holiday.name ||= "OOO";
+    holiday.type = isTimedOooRecord(holiday) ? OOO_TYPE_TIME : OOO_TYPE_ALL_DAY;
+    if (holiday.type === OOO_TYPE_TIME) {
+      normalizeForwardTimeFields(holiday, "12:00", "12:30");
+    } else {
+      delete holiday.start;
+      delete holiday.end;
+    }
+    delete holiday.allDay;
   });
-  return normalizedHolidays.sort((left, right) => (left.date || "").localeCompare(right.date || ""));
+  return normalizedHolidays.sort(compareOooRecords);
 }
 
 function migrateGlobalAllUserHolidaysToRegions() {
@@ -7907,7 +8352,10 @@ function migrateGlobalAllUserHolidaysToRegions() {
       const alreadyExists = regionHolidays.some((existing) => (
         existing.userId === GLOBAL_HOLIDAY_USER_ID
           && existing.date === holiday.date
-          && (existing.name || "Holiday") === (holiday.name || "Holiday")
+          && getOooType(existing) === getOooType(holiday)
+          && (existing.start || "") === (holiday.start || "")
+          && (existing.end || "") === (holiday.end || "")
+          && (existing.name || "OOO") === (holiday.name || "OOO")
       ));
       if (!alreadyExists) {
         regionHolidays.push({
@@ -8033,6 +8481,63 @@ function normalizeScopedQueues(queues, systems) {
   });
 }
 
+function normalizeQueueBaselines(source) {
+  const baseline = source && typeof source === "object" ? source : {};
+  const normalized = {
+    global: baseline.global && typeof baseline.global === "object" ? cloneData(baseline.global) : {},
+    regional: {}
+  };
+  normalizeScopedQueues(normalized.global, data.systems);
+
+  const regionalSource = baseline.regional && typeof baseline.regional === "object" ? baseline.regional : {};
+  if (hasRegionalScopes()) {
+    data.regions.forEach((region) => {
+      normalized.regional[region.id] = regionalSource[region.id] && typeof regionalSource[region.id] === "object"
+        ? cloneData(regionalSource[region.id])
+        : {};
+      normalizeScopedQueues(normalized.regional[region.id], getScopedSystems(region.id));
+    });
+  }
+
+  return normalized;
+}
+
+function buildQueuePositionsFromAssignmentLog(assignments = data.assignmentLog, queueBaselines = data.queueBaselines) {
+  const normalizedBaselines = normalizeQueueBaselines(queueBaselines);
+  const rebuiltQueues = cloneData(normalizedBaselines.global);
+  const rebuiltRegionalQueues = cloneData(normalizedBaselines.regional);
+  const activeRegions = hasRegionalScopes() ? data.regions : [];
+
+  normalizeScopedQueues(rebuiltQueues, data.systems);
+  activeRegions.forEach((region) => {
+    rebuiltRegionalQueues[region.id] ||= {};
+    normalizeScopedQueues(rebuiltRegionalQueues[region.id], getScopedSystems(region.id));
+  });
+
+  (Array.isArray(assignments) ? assignments : [])
+    .slice()
+    .sort((left, right) => getAssignmentTimestamp(left) - getAssignmentTimestamp(right))
+    .forEach((entry) => {
+      const regionId = normalizeRegionScopeId(entry.regionId);
+      const systems = getScopedSystems(regionId);
+      const queues = regionId ? rebuiltRegionalQueues[regionId] : rebuiltQueues;
+      const system = systems.find((item) => isAssignmentForSystem(entry, item, regionId));
+      if (!system || system.primaryUserIds.length === 0) {
+        return;
+      }
+
+      const userIndex = system.primaryUserIds.indexOf(entry.userId);
+      if (userIndex >= 0) {
+        queues[system.id] = (userIndex + 1) % system.primaryUserIds.length;
+      }
+    });
+
+  return {
+    global: rebuiltQueues,
+    regional: rebuiltRegionalQueues
+  };
+}
+
 function getIncidentConfig() {
   return normalizeIncidentConfig(data?.incidentConfig);
 }
@@ -8145,6 +8650,7 @@ function normalizeData() {
   data.assignmentLog.forEach(normalizeAssignmentIncident);
   data.assignmentRules = normalizeAssignmentRulesConfig(data.assignmentRules);
   data.incidentConfig = normalizeIncidentConfig(data.incidentConfig);
+  data.retentionPolicy = normalizeRetentionPolicy(data.retentionPolicy);
   data.exceptions = Array.isArray(data.exceptions) ? data.exceptions : [];
   data.holidays = Array.isArray(data.holidays) ? data.holidays : [];
   data.regionsEnabled = data.regionsEnabled !== false;
@@ -8229,6 +8735,7 @@ function normalizeData() {
     data.regions.forEach((region) => normalizeRegionSettings(region.id));
     migrateGlobalAllUserHolidaysToRegions();
   }
+  data.queueBaselines = normalizeQueueBaselines(data.queueBaselines);
 
   const normalizedDelegationSlots = [];
   (Array.isArray(data.delegationSlots) ? data.delegationSlots : []).forEach((slot) => {
@@ -8245,6 +8752,8 @@ function normalizeData() {
     .filter(Boolean);
   data.delegations.sort(compareDelegationsByStart);
   data.assignmentLog.sort((left, right) => getAssignmentTimestamp(left) - getAssignmentTimestamp(right));
+  applyRetentionPolicy();
+  data.queueBaselines = normalizeQueueBaselines(data.queueBaselines);
 
   rebuildQueuesFromAssignmentLog();
 }
@@ -8360,40 +8869,12 @@ function normalizeScheduleDayOffsetFields(record) {
 }
 
 function rebuildQueuesFromAssignmentLog() {
-  const rebuiltQueues = {};
-  data.systems.forEach((system) => {
-    rebuiltQueues[system.id] = 0;
-  });
-  const rebuiltRegionalQueues = {};
+  const rebuiltQueuePositions = buildQueuePositionsFromAssignmentLog(data.assignmentLog, data.queueBaselines);
   const activeRegions = hasRegionalScopes() ? data.regions : [];
+
+  data.queues = rebuiltQueuePositions.global;
   activeRegions.forEach((region) => {
-    rebuiltRegionalQueues[region.id] = {};
-    getScopedSystems(region.id).forEach((system) => {
-      rebuiltRegionalQueues[region.id][system.id] = 0;
-    });
-  });
-
-  data.assignmentLog
-    .slice()
-    .sort((left, right) => getAssignmentTimestamp(left) - getAssignmentTimestamp(right))
-    .forEach((entry) => {
-      const regionId = normalizeRegionScopeId(entry.regionId);
-      const systems = getScopedSystems(regionId);
-      const queues = regionId ? rebuiltRegionalQueues[regionId] : rebuiltQueues;
-      const system = systems.find((item) => isAssignmentForSystem(entry, item, regionId));
-      if (!system || system.primaryUserIds.length === 0) {
-        return;
-      }
-
-      const userIndex = system.primaryUserIds.indexOf(entry.userId);
-      if (userIndex >= 0) {
-        queues[system.id] = (userIndex + 1) % system.primaryUserIds.length;
-      }
-    });
-
-  data.queues = rebuiltQueues;
-  activeRegions.forEach((region) => {
-    getRegionSettings(region.id).queues = rebuiltRegionalQueues[region.id];
+    getRegionSettings(region.id).queues = rebuiltQueuePositions.regional[region.id] || {};
   });
 }
 
@@ -8472,6 +8953,7 @@ function updateScheduleRangeConstraints() {
 function updateForwardTimeInputConstraints() {
   [
     [elements.slotStartInput, elements.slotEndInput],
+    [elements.holidayStartInput, elements.holidayEndInput],
     [elements.delegationStartInput, elements.delegationEndInput]
   ].forEach(([startInput, endInput]) => {
     if (startInput && endInput) {
@@ -8483,14 +8965,6 @@ function updateForwardTimeInputConstraints() {
       endInput.min = "";
     }
   });
-}
-
-function getBusinessWeekRange(date) {
-  const weekDates = getWeekDates(date);
-  return {
-    startDate: weekDates[0],
-    endDate: weekDates[4]
-  };
 }
 
 function graphBlock(block, options = {}) {
@@ -8601,7 +9075,7 @@ function graphRemoveButton(block) {
     `;
   }
 
-  if (block.type === "break" || block.type === "extra") {
+  if ((block.type === "break" && block.source !== "ooo") || block.type === "extra") {
     return `
       <button
         class="graph-remove"
@@ -8804,6 +9278,10 @@ function getDelegationReferenceDate() {
     || getEasternNow().date;
 }
 
+function getHolidayReferenceDate() {
+  return elements.holidayDateInput?.value || getScheduleReferenceDate();
+}
+
 function getSelectedTimezoneAbbreviationForDate(date) {
   const referenceDate = zonedWallTimeToDate(date, "12:00", EASTERN_TIME_ZONE);
   return getTimezoneAbbreviation(referenceDate, getSelectedDisplayTimezone());
@@ -8889,233 +9367,6 @@ function formatInstantTimeForDisplay(date, timezone = getSelectedDisplayTimezone
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   const abbreviation = getTimezoneAbbreviation(date, timezone);
   return `${values.hour}:${values.minute} ${abbreviation}`;
-}
-
-function getZonedDateTimeParts(date, timeZone) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return {
-    date: `${values.year}-${values.month}-${values.day}`,
-    time: `${values.hour}:${values.minute}`
-  };
-}
-
-function getTimezoneAbbreviation(date, timezone) {
-  const offsetMinutes = getTimeZoneOffsetMinutes(date, timezone.timeZone);
-  const configuredAbbreviation = TIMEZONE_ABBREVIATIONS[timezone.id]?.[String(offsetMinutes)];
-  if (configuredAbbreviation) {
-    return configuredAbbreviation;
-  }
-
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone.timeZone,
-      timeZoneName: "short"
-    }).formatToParts(date);
-    return parts.find((p) => p.type === "timeZoneName")?.value || timezone.id.toUpperCase();
-  } catch {
-    return timezone.id.toUpperCase();
-  }
-}
-
-function getTimeZoneOffsetMinutes(date, timeZone) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const localAsUtc = Date.UTC(
-    Number(values.year),
-    Number(values.month) - 1,
-    Number(values.day),
-    Number(values.hour),
-    Number(values.minute),
-    Number(values.second)
-  );
-  return Math.round((localAsUtc - date.getTime()) / 60000);
-}
-
-function zonedWallTimeToDate(date, time, timeZone) {
-  const [year, month, day] = date.split("-").map(Number);
-  const [hour, minute] = time.split(":").map(Number);
-  const targetUtc = Date.UTC(year, month - 1, day, hour, minute);
-  let timestamp = targetUtc;
-
-  for (let index = 0; index < 3; index += 1) {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23"
-    }).formatToParts(new Date(timestamp));
-    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-    const formattedUtc = Date.UTC(
-      Number(values.year),
-      Number(values.month) - 1,
-      Number(values.day),
-      Number(values.hour),
-      Number(values.minute)
-    );
-    timestamp += targetUtc - formattedUtc;
-  }
-
-  return new Date(timestamp);
-}
-
-function formatDisplayDate(date) {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "UTC",
-    year: "numeric",
-    month: "long",
-    day: "numeric"
-  }).format(parseDate(date));
-}
-
-function isValidDateInput(date) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) && formatDate(parseDate(date)) === date;
-}
-
-function isValidTimeInput(time) {
-  return /^([01]\d|2[0-3]):[0-5]\d$/.test(time);
-}
-
-function getWeekDates(date) {
-  const base = parseDate(date);
-  const day = base.getUTCDay();
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  const monday = addDays(base, mondayOffset);
-
-  return Array.from({ length: 7 }, (_, index) => formatDate(addDays(monday, index)));
-}
-
-function parseDate(date) {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, day, 12));
-}
-
-function addDays(date, days) {
-  const next = new Date(date);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
-}
-
-function formatDate(date) {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function getDayNameFromDate(date) {
-  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(parseDate(date));
-}
-
-function isWithinWindow(currentMinutes, startMinutes, endMinutes) {
-  if (startMinutes <= endMinutes) {
-    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
-  }
-
-  return currentMinutes >= startMinutes || currentMinutes < endMinutes;
-}
-
-function toMinutes(time) {
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
-}
-
-function minutesToTime(totalMinutes) {
-  const normalized = Math.max(0, Math.min(totalMinutes, 24 * 60 - 1));
-  const hours = Math.floor(normalized / 60).toString().padStart(2, "0");
-  const minutes = (normalized % 60).toString().padStart(2, "0");
-  return `${hours}:${minutes}`;
-}
-
-function formatWaitDuration(totalMinutes) {
-  const minutesUntilAvailable = Math.max(0, Math.round(totalMinutes));
-  if (minutesUntilAvailable === 0) {
-    return "now";
-  }
-
-  if (minutesUntilAvailable < 60) {
-    return `${minutesUntilAvailable} min${minutesUntilAvailable === 1 ? "" : "s"}`;
-  }
-
-  if (minutesUntilAvailable >= 24 * 60) {
-    const days = Math.floor(minutesUntilAvailable / (24 * 60));
-    const remainingMinutes = minutesUntilAvailable % (24 * 60);
-    const hours = Math.floor(remainingMinutes / 60);
-    const minutes = remainingMinutes % 60;
-    const parts = [`${days} day${days === 1 ? "" : "s"}`];
-    if (hours > 0) {
-      parts.push(`${hours}hr${hours === 1 ? "" : "s"}`);
-    }
-    if (minutes > 0) {
-      parts.push(`${minutes} min${minutes === 1 ? "" : "s"}`);
-    }
-    return parts.join(" ");
-  }
-
-  const hours = Math.floor(minutesUntilAvailable / 60);
-  const minutes = minutesUntilAvailable % 60;
-  return minutes === 0
-    ? `${hours}hr${hours === 1 ? "" : "s"}`
-    : `${hours}hr${hours === 1 ? "" : "s"} ${String(minutes).padStart(2, "0")} mins`;
-}
-
-function roundToNearestSlot(minutes) {
-  return Math.round(minutes / SLOT_MINUTES) * SLOT_MINUTES;
-}
-
-function isValidTimeRange(start, end) {
-  return isForwardTimeRange(start, end);
-}
-
-function isForwardTimeRange(start, end) {
-  return isValidTimeInput(start) && isValidTimeInput(end) && toMinutes(start) < toMinutes(end);
-}
-
-function isForwardDateRange(startDate, endDate) {
-  return isValidDateInput(startDate) && isValidDateInput(endDate) && startDate <= endDate;
-}
-
-function isSameDayForwardEasternRange(start, end) {
-  return start.date === end.date && isForwardTimeRange(start.time, end.time);
-}
-
-function isForwardDateTimeRange(startDate, startTime, endDate, endTime, allowEqual = false) {
-  const comparison = compareDateTimeValues(startDate, startTime, endDate, endTime);
-  return allowEqual ? comparison <= 0 : comparison < 0;
-}
-
-function compareDateTimeRecords(left, right) {
-  return compareDateTimeValues(left.startDate || left.date, left.start, right.startDate || right.date, right.start);
-}
-
-function compareDateTimeValues(startDate, startTime, endDate, endTime) {
-  const left = isValidDateInput(startDate || "") && isValidTimeInput(startTime || "")
-    ? `${startDate} ${startTime}`
-    : "";
-  const right = isValidDateInput(endDate || "") && isValidTimeInput(endTime || "")
-    ? `${endDate} ${endTime}`
-    : "";
-  return left.localeCompare(right);
 }
 
 function getQueueIndex(system, regionId = selectedAssignmentRegionId) {
