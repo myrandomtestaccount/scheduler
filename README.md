@@ -35,21 +35,21 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 
 ### Main Assignment Page
 
-- Coverage picker: choose the system/app that needs a ticket owner.
+- Coverage picker: choose a region and system/app that needs a ticket owner.
 - Current queue: shows the recommended SME order for the selected coverage.
 - Availability badges: labels users as available, later today, on break, done today, not scheduled, or on holiday.
 - Assignment action: selecting an SME and clicking `Mark selected user assigned` records the ticket owner and advances the relevant queue.
 - Queue advancement: normal SME assignments rotate the queue to the next SME for that coverage.
 - `Other` option: lets a delegator pick someone from the wider roster without advancing the selected coverage queue.
-- Other roster ordering: online users appear by team priority first, then users scheduled later today appear by schedule order.
+- Other roster ordering: online users in the current region view appear by that region’s team ranking first, then users scheduled later today appear by schedule order.
 - Unselectable users: people with no schedule, completed schedule, or holiday are blocked from normal assignment.
 - Future assignment speedbump: if everyone is unavailable but someone is scheduled later, the app can warn before assigning far ahead.
 - Daily ownership ranking: shows who has received the most tickets today.
-- Coverage dashboard: shows all coverage queues, ticket counts, availability, and quick open buttons.
+- Coverage dashboard: shows all coverage queues for the selected region, ticket counts, availability, and quick open buttons.
 - Recent assignments: shows recent ticket assignments and allows edit/delete when visible.
 - Assignment history: records assignment time, coverage, assignee, amended entries, and dev-mode test assignments.
 - Current delegator: shows who owns the current delegation slot.
-- Incident redirect: when enabled, redirects after assignment to the exact configured URL with no added query parameters.
+- Incident redirect: when enabled, shows an `Open incident` link for the exact configured URL with no added query parameters; it never opens automatically.
 
 ### Scheduling and Availability
 
@@ -62,31 +62,42 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 - Extra slots: admins can add dated extra availability windows outside normal schedules.
 - Holidays: admins can mark one user or all users as unavailable for a date.
 - Schedule graph: admins can review schedules in day or week view.
+- All-region graph: the global admin day graph uses a padded 26-hour window from one hour before APAC-style evening coverage through one hour after Americas close.
+- Regional graph limits: each region graph shows its coverage window with one hour of padding before and after.
+- Overnight graph labels: schedules stay in one range; `T-1` marks true previous-day starts and `T+1` marks true next-day endings relative to the visible graph date.
 - Graph prefill: day-view schedule blocks can prefill the schedule form for quicker edits.
 - Forward-time validation: schedule, slot, shift, and delegation ranges must run from older to newer times.
 - Eastern source of truth: saved schedule times are interpreted in `America/New_York`.
 - Display time zones: admins can choose which time zones appear in the main clock selector.
+- Timezone labels: configured display zones use friendly acronyms such as `JST/KST`, `CET`, and `AEST/AEDT` instead of browser `GMT+offset` fallbacks where possible.
 - Main clock selector: users can switch the displayed time zone without changing stored schedule data.
 - Dev-mode time: authorized users can test queue behavior at a chosen date and time.
 
 ### Queue Recommendation Rules
 
 - Availability rule: online users are preferred before unavailable users.
-- SME order rule: coverage-specific SME priority can influence queue order.
+- SME order rule: available coverage SMEs follow assignment ranking; when no SME is available, availability and schedule start time drive the fallback order.
 - Shift order rule: users can be recommended by schedule start and rotation behavior.
 - Daily ticket balancing: queue sorting can consider how many tickets each user received today.
 - Consecutive assignment awareness: queue sorting can reduce repeated assignment streaks.
-- Team priority: the global team order is used as an escalation hierarchy and tie-breaker.
+- Team priority: each region has its own team ranking for escalation hierarchy and tie-breakers; the global order is only used when regions are disabled or no region is selected.
 - Policy presets: admins can choose between `SME order` and `Shift order` recommendation styles.
 
 ### Admin Team and Coverage Setup
 
 - Team management: admins can add and remove team members.
+- Team region breakdown: the global Team view groups users by region; each region has its own independent ranking, and a selected region admin view shows only that region’s users.
 - Protected removal: removing users uses a confirmation flow that explains impact.
 - Regions toggle: admins can turn region separation on or off.
 - Region list: admins can create and remove region labels such as Americas, EMEA, and APAC.
+- Region hours: each region stores its own Eastern Time operating window. Windows can cross midnight, but cannot exceed 14 hours.
 - User-region mapping: users can belong to one or more regions.
-- Coverage management: admins can add and remove systems/apps.
+- Regional admin view: when regions exist, overview tabs can switch between `All regions` and each region page; Rules is always edited on a specific region.
+- Regional settings: each region page has its own team ranking, assignment rules, shift presets, holidays, coverage list, SME mappings, and queue positions.
+- Regional schedule graph: when a region admin view is selected, the graph timeline uses that region’s hours as its visible limits and shows only users assigned to that region. It does not render a separate region-hours lane.
+- Regional shifts: every region gets a default region-hours preset based on its operating window, for example AMER `07:00–19:00` ET and APAC `19:00–07:00` ET; All regions shows current shifts grouped by region.
+- Coverage management: admins can add and remove systems/apps in the selected admin view.
+- System regions: each system/app has one or more selected regions; its coverage SME picker is limited to users assigned to those selected regions.
 - Coverage config item: when ServiceNow incident mode is enabled, each coverage can store the ServiceNow configuration item used for that queue.
 - SME mapping: admins can assign users to each system/app.
 - SME priority order: admins can reorder coverage SMEs with move-up and move-down controls.
@@ -107,7 +118,7 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 ### Incident Configuration
 
 - Enable incident creation: admins can turn incident behavior on or off.
-- Redirect mode: after assignment, the browser redirects to the exact configured URL.
+- Redirect mode: after assignment, the scheduler shows an `Open incident` button; the browser opens the configured URL only when the user clicks it.
 - ServiceNow mode: stores future ServiceNow API settings and prompts for incident details after assignment.
 - ServiceNow incident form: asks for description and priority; the config item comes from the selected coverage queue.
 - ServiceNow field mapping: saved payloads use the description for both `description` and `short_description`; priority also sets `severity` to the same numeric value.
@@ -119,7 +130,8 @@ On Windows, double-click `start-shared.bat` if Node.js is installed.
 
 ### Admin Safety and UI
 
-- Locked admin sections: sensitive sections must be unlocked before editing.
+- Locked admin sections: sensitive sections must be unlocked before editing; admin actions stay unlocked after saving until you click `Lock`.
+- Admin save buttons: each locked section header includes `Save` so admins can explicitly persist without relocking.
 - Backup lock: import/reset actions require an extra backup unlock confirmation.
 - Confirmation modals: destructive user, shift, schedule, holiday, delegation, and reset actions ask before changing data.
 - Validation alerts: invalid dates, time ranges, overlaps, missing required fields, and import errors show friendly warnings.
@@ -162,15 +174,15 @@ Click `Admin tools` from the main page, or open `admin.html` directly.
 
 Admin sections:
 
-- `Users`: add/remove team members.
-- `Regions`: choose whether to separate users by region, then define the region list used in Team and queue views.
+- `Users`: add/remove team members and reorder each region’s independent ranking.
+- `Regions`: choose whether to separate users by region, define each region, and set that region’s operating hours.
 - `Schedules`: add weekly schedules, click the all-user graph to prefill user/day/time, add breaks, add extra coverage slots, and review readable user-by-user schedules.
 - `Delegation`: define predefined coverage time slots, assign only scheduled delegators or leave a slot/date unassigned, and review the day/week graph.
-- `Assignment rules`: choose how recommendations are sorted. The default is schedule-first.
-- `Shift presets`: define reusable shift names and times.
-- `Systems / apps`: add systems, define ServiceNow config items when ServiceNow mode is enabled, and assign/reorder primary SMEs.
+- `Assignment rules`: choose how recommendations are sorted for a specific region. Each region stores its own rule preset. The default is schedule-first.
+- `Shift presets`: define reusable shift names and times for the selected admin view. The generated region-hours preset can be up to 14 hours; regular user shifts remain capped at 12 hours.
+- `Systems / apps`: add systems, select one or more regions per system, define ServiceNow config items when ServiceNow mode is enabled, and assign/reorder primary SMEs from those selected regions.
 - `Incidents`: turn incident creation on/off, configure post-assignment redirects, and prepare ServiceNow or Teams settings.
-- `Holidays`: add user-specific or all-team holidays.
+- `Holidays`: add individual user holidays or choose `All users in <region>` for region-wide holidays.
 - `Data`: export/import JSON backups.
 
 Incident templates support `{{assignee}}`, `{{assignee_mention}}`, `{{coverage}}`, `{{assigned_at}}`, `{{incident_url}}`, `{{servicenow_incident_description}}`, and `{{servicenow_incident_id}}`.
@@ -179,7 +191,7 @@ Incident templates support `{{assignee}}`, `{{assignee_mention}}`, `{{coverage}}
 
 All schedule times are interpreted in `America/New_York` time. The UI labels this as Eastern Time because the actual offset changes between EST and EDT during the year.
 
-Recommendation sorting can use schedule start time, per-system SME order, total tickets assigned today, and current same-user assignment streak.
+Recommendation sorting can use available per-system SME order, schedule start time, total tickets assigned today, and current same-user assignment streak.
 
 ## GitHub
 
@@ -191,6 +203,7 @@ admin.html
 styles.css
 app.js
 server.js
+images/logo.png
 start-shared.bat
 start-shared.command
 README.md

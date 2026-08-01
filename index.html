@@ -18,7 +18,7 @@
     <header class="hero primary-hero">
       <div class="hero-topbar">
         <a class="brand-lockup" href="index.html" aria-label="Go to assignment queue">
-          <img src="logo.png" alt="" aria-hidden="true" class="logo-img">
+          <img src="images/logo.png" alt="" aria-hidden="true" class="logo-img">
           <span class="logo-wordmark">SME Queue</span>
         </a>
         <div class="hero-actions">
@@ -61,10 +61,16 @@
           </div>
         </div>
 
-        <label class="field large-field coverage-picker">
-          <span class="sr-only">System / app</span>
-          <select id="assignmentSystemSelect"></select>
-        </label>
+        <div class="coverage-picker-grid">
+          <label id="assignmentRegionField" class="field large-field coverage-picker hidden">
+            <span>Region</span>
+            <select id="assignmentRegionSelect"></select>
+          </label>
+          <label class="field large-field coverage-picker">
+            <span>Select coverage</span>
+            <select id="assignmentSystemSelect"></select>
+          </label>
+        </div>
 
         <section id="queueSection" class="assignment-section queue-section hidden">
           <div class="section-heading tight">
@@ -76,7 +82,7 @@
 
           <div id="otherAssigneePicker" class="other-assignee-picker hidden">
             <label class="field">
-              <span>Current global roster</span>
+              <span>Current roster</span>
               <select id="otherAssigneeSelect"></select>
             </label>
           </div>
@@ -114,7 +120,13 @@
             </div>
           </div>
           <div id="queueDashboardPanel" class="queue-dashboard-panel hidden">
-            <h3>Coverage dashboard</h3>
+            <div class="dashboard-panel-header">
+              <h3>Coverage dashboard</h3>
+              <label id="queueDashboardRegionField" class="field mini-field dashboard-region-field hidden">
+                <span>Region</span>
+                <select id="queueDashboardRegionSelect"></select>
+              </label>
+            </div>
             <div id="queueDashboardList" class="queue-dashboard-grid"></div>
           </div>
           <div id="recentAssignmentsPanel" class="recent-assignments-panel hidden">

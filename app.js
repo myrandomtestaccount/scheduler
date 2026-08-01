@@ -7,11 +7,18 @@ const SHARED_STATE_REFRESH_MS = 10000;
 const THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const EASTERN_TIME_ZONE = "America/New_York";
 const GLOBAL_HOLIDAY_USER_ID = "__all__";
+const REGION_HOLIDAY_USER_PREFIX = "__region_all__:";
+const SHIFT_TEMPLATE_SCOPE_SEPARATOR = "::";
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const SCHEDULE_DAYS = DAYS.slice(0, 5);
 const TIMELINE_START_MINUTES = 6 * 60;
 const TIMELINE_END_MINUTES = 22 * 60;
 const SLOT_MINUTES = 30;
+const MAX_SCHEDULE_DURATION_MINUTES = 12 * 60;
+const MAX_REGION_COVERAGE_MINUTES = 14 * 60;
+const SCHEDULE_GRAPH_PADDING_MINUTES = 60;
+const GLOBAL_SCHEDULE_GRAPH_DURATION_MINUTES = 26 * 60;
+const END_OF_DAY_TIME = "23:59";
 const RECENT_ASSIGNMENTS_WINDOW_MS = 24 * 60 * 60 * 1000;
 const LONG_FUTURE_ASSIGNMENT_MINUTES = 12 * 60;
 const SHIFT_ORDER_PRESET_ID = "schedule-first";
@@ -19,6 +26,8 @@ const SHIFT_QUEUE_SYSTEM_ID = "__shift_queue__";
 const SHIFT_QUEUE_SYSTEM_NAME = "Shift queue";
 const OTHER_QUEUE_USER_ID = "__other__";
 const OTHER_QUEUE_USER_NAME = "Other";
+const GLOBAL_REGION_SCOPE_ID = "";
+const GLOBAL_REGION_SCOPE_NAME = "All regions";
 const INCIDENT_CREATE_URL = "https://www.google.com/";
 const INCIDENT_CREATION_MODES = ["redirect", "servicenow"];
 const SERVICENOW_PRIORITIES = ["1", "2", "3", "4"];
@@ -82,14 +91,415 @@ const AVAILABLE_TIMEZONES = [
   { id: "samoa", timeZone: "Pacific/Apia", label: "Samoa" }
 ];
 
+const TIMEZONE_ABBREVIATIONS = {
+  et: { "-300": "EST", "-240": "EDT" },
+  ct: { "-360": "CST", "-300": "CDT" },
+  mt: { "-420": "MST", "-360": "MDT" },
+  pt: { "-480": "PST", "-420": "PDT" },
+  ak: { "-540": "AKST", "-480": "AKDT" },
+  ht: { "-600": "HST" },
+  utc: { "0": "UTC" },
+  london: { "0": "GMT", "60": "BST" },
+  paris: { "60": "CET", "120": "CEST" },
+  athens: { "120": "EET", "180": "EEST" },
+  moscow: { "180": "MSK" },
+  istanbul: { "180": "TRT" },
+  dubai: { "240": "GST" },
+  karachi: { "300": "PKT" },
+  ist: { "330": "IST" },
+  dhaka: { "360": "BST" },
+  bangkok: { "420": "ICT" },
+  beijing: { "480": "CST/SGT" },
+  tokyo: { "540": "JST/KST" },
+  sydney: { "600": "AEST", "660": "AEDT" },
+  adelaide: { "570": "ACST", "630": "ACDT" },
+  perth: { "480": "AWST" },
+  auckland: { "720": "NZST", "780": "NZDT" },
+  samoa: { "780": "WST" }
+};
+
 const DEFAULT_REGIONS = [
-  { id: "amer", name: "Americas" },
-  { id: "emea", name: "EMEA" },
-  { id: "apac", name: "APAC" }
+  { id: "amer", name: "Americas", coverageStart: "07:00", coverageEnd: "19:00" },
+  { id: "emea", name: "EMEA", coverageStart: "07:00", coverageEnd: "19:00" },
+  { id: "apac", name: "APAC", coverageStart: "19:00", coverageEnd: "07:00" }
 ];
 
 function getDisplayTimezones() {
   return data?.displayTimezones?.length ? data.displayTimezones : DEFAULT_DISPLAY_TIMEZONES;
+}
+
+function hasRegionalScopes() {
+  return data?.regionsEnabled !== false && Array.isArray(data?.regions) && data.regions.length > 0;
+}
+
+function normalizeRegionScopeId(regionId) {
+  const value = String(regionId || "");
+  return hasRegionalScopes() && data.regions.some((region) => region.id === value)
+    ? value
+    : GLOBAL_REGION_SCOPE_ID;
+}
+
+function getRegionScopeLabel(regionId) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  return normalizedId
+    ? data.regions.find((region) => region.id === normalizedId)?.name || "Region"
+    : GLOBAL_REGION_SCOPE_NAME;
+}
+
+function createDefaultRegionSettings(regionId = GLOBAL_REGION_SCOPE_ID) {
+  const baseAssignmentRules = data?.assignmentRules || DEFAULT_ASSIGNMENT_RULES;
+  return {
+    assignmentRules: { ...baseAssignmentRules },
+    shiftTemplates: createDefaultRegionShiftTemplates(regionId),
+    teamOrderIds: [],
+    queues: {},
+    holidays: []
+  };
+}
+
+function getRegionSettings(regionId) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (!normalizedId) {
+    return null;
+  }
+
+  data.regionalSettings ||= {};
+  data.regionalSettings[normalizedId] ||= createDefaultRegionSettings(normalizedId);
+  return data.regionalSettings[normalizedId];
+}
+
+function getScopedAssignmentRules(regionId = GLOBAL_REGION_SCOPE_ID) {
+  return normalizeRegionScopeId(regionId)
+    ? getRegionSettings(regionId).assignmentRules
+    : data.assignmentRules;
+}
+
+function setScopedAssignmentRules(regionId, assignmentRules) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (normalizedId) {
+    getRegionSettings(normalizedId).assignmentRules = assignmentRules;
+    return;
+  }
+
+  data.assignmentRules = assignmentRules;
+}
+
+function getScopedShiftTemplates(regionId = GLOBAL_REGION_SCOPE_ID) {
+  return normalizeRegionScopeId(regionId)
+    ? getRegionSettings(regionId).shiftTemplates
+    : data.shiftTemplates;
+}
+
+function setScopedShiftTemplates(regionId, shiftTemplates) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (normalizedId) {
+    getRegionSettings(normalizedId).shiftTemplates = shiftTemplates;
+    return;
+  }
+
+  data.shiftTemplates = shiftTemplates;
+}
+
+function getScopedSystems(regionId = GLOBAL_REGION_SCOPE_ID) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (!normalizedId) {
+    return data.systems;
+  }
+
+  return data.systems.filter((system) => getSystemRegionIds(system).includes(normalizedId));
+}
+
+function setScopedSystems(regionId, systems) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (normalizedId) {
+    const scopedSystemIds = new Set(systems.map((system) => system.id));
+    data.systems = data.systems
+      .filter((system) => !getSystemRegionIds(system).includes(normalizedId) || scopedSystemIds.has(system.id))
+      .map((system) => systems.find((item) => item.id === system.id) || system);
+    return;
+  }
+
+  data.systems = systems;
+}
+
+function getScopedQueues(regionId = GLOBAL_REGION_SCOPE_ID) {
+  return normalizeRegionScopeId(regionId)
+    ? getRegionSettings(regionId).queues
+    : data.queues;
+}
+
+function getScopedHolidays(regionId = GLOBAL_REGION_SCOPE_ID) {
+  return normalizeRegionScopeId(regionId)
+    ? getRegionSettings(regionId).holidays
+    : data.holidays;
+}
+
+function setScopedHolidays(regionId, holidays) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (normalizedId) {
+    getRegionSettings(normalizedId).holidays = holidays;
+    return;
+  }
+
+  data.holidays = holidays;
+}
+
+function getUsersForRegionScope(regionId = GLOBAL_REGION_SCOPE_ID) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  return normalizedId
+    ? data.users.filter((user) => user.regionIds?.includes(normalizedId))
+    : data.users;
+}
+
+function getRankedUsersForRegionScope(regionId = GLOBAL_REGION_SCOPE_ID) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (!normalizedId) {
+    return data.users;
+  }
+
+  const usersById = new Map(getUsersForRegionScope(normalizedId).map((user) => [user.id, user]));
+  return getRegionTeamOrderIds(normalizedId)
+    .map((userId) => usersById.get(userId))
+    .filter(Boolean);
+}
+
+function getRegionTeamOrderIds(regionId) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (!normalizedId) {
+    return data.users.map((user) => user.id);
+  }
+
+  const settings = getRegionSettings(normalizedId);
+  settings.teamOrderIds = normalizeTeamOrderIds(settings.teamOrderIds, normalizedId);
+  return settings.teamOrderIds;
+}
+
+function setRegionTeamOrderIds(regionId, userIds) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (!normalizedId) {
+    return;
+  }
+
+  getRegionSettings(normalizedId).teamOrderIds = normalizeTeamOrderIds(userIds, normalizedId);
+}
+
+function normalizeTeamOrderIds(userIds, regionId) {
+  const regionUserIds = getUsersForRegionScope(regionId).map((user) => user.id);
+  const validIds = new Set(regionUserIds);
+  const seenIds = new Set();
+  const normalizedIds = [];
+
+  (Array.isArray(userIds) ? userIds : []).forEach((userId) => {
+    const normalizedUserId = String(userId || "");
+    if (validIds.has(normalizedUserId) && !seenIds.has(normalizedUserId)) {
+      normalizedIds.push(normalizedUserId);
+      seenIds.add(normalizedUserId);
+    }
+  });
+
+  regionUserIds.forEach((userId) => {
+    if (!seenIds.has(userId)) {
+      normalizedIds.push(userId);
+    }
+  });
+
+  return normalizedIds;
+}
+
+function addUserToRegionTeamOrder(regionId, userId) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (!normalizedId) {
+    return;
+  }
+
+  const orderIds = getRegionTeamOrderIds(normalizedId);
+  if (!orderIds.includes(userId)) {
+    setRegionTeamOrderIds(normalizedId, orderIds.concat(userId));
+  }
+}
+
+function removeUserFromRegionTeamOrder(regionId, userId) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (!normalizedId || !data.regionalSettings?.[normalizedId]) {
+    return;
+  }
+
+  data.regionalSettings[normalizedId].teamOrderIds = (data.regionalSettings[normalizedId].teamOrderIds || [])
+    .filter((id) => id !== userId);
+}
+
+function removeUserFromAllRegionTeamOrders(userId) {
+  Object.keys(data.regionalSettings || {}).forEach((regionId) => removeUserFromRegionTeamOrder(regionId, userId));
+}
+
+function getSystemRegionIds(system) {
+  if (!areRegionsEnabled()) {
+    return [];
+  }
+
+  const validRegionIds = new Set((data?.regions || []).map((region) => region.id));
+  const sourceIds = Array.isArray(system?.regionIds)
+    ? system.regionIds
+    : system?.regionId
+      ? [system.regionId]
+      : [];
+  return Array.from(new Set(sourceIds.map(String).filter((regionId) => validRegionIds.has(regionId))));
+}
+
+function getSystemCoverageUsers(system) {
+  const regionIds = getSystemRegionIds(system);
+  if (!areRegionsEnabled() || regionIds.length === 0) {
+    return data.users;
+  }
+
+  return data.users.filter((user) => regionIds.some((regionId) => user.regionIds?.includes(regionId)));
+}
+
+function getSystemRegionLabel(system) {
+  const regionIds = getSystemRegionIds(system);
+  if (!areRegionsEnabled() || regionIds.length === 0) {
+    return "All regions";
+  }
+
+  return regionIds
+    .map((regionId) => data.regions.find((region) => region.id === regionId)?.name || "Region")
+    .join(", ");
+}
+
+function getDefaultSystemRegionIds(fallbackRegionId = GLOBAL_REGION_SCOPE_ID) {
+  if (!areRegionsEnabled() || data.regions.length === 0) {
+    return [];
+  }
+
+  const normalizedFallback = normalizeRegionScopeId(fallbackRegionId);
+  return normalizedFallback ? [normalizedFallback] : data.regions.map((region) => region.id);
+}
+
+function userBelongsToAnyRegion(user, regionIds) {
+  return !areRegionsEnabled()
+    || regionIds.length === 0
+    || regionIds.some((regionId) => user.regionIds?.includes(regionId));
+}
+
+function pruneSystemCoverageToRegions(system) {
+  const regionIds = getSystemRegionIds(system);
+  const allowedUserIds = new Set(data.users
+    .filter((user) => userBelongsToAnyRegion(user, regionIds))
+    .map((user) => user.id));
+  system.primaryUserIds = Array.isArray(system.primaryUserIds)
+    ? system.primaryUserIds.filter((userId) => allowedUserIds.has(userId))
+    : [];
+}
+
+function ensureSystemQueues(system) {
+  getSystemRegionIds(system).forEach((regionId) => {
+    getScopedQueues(regionId)[system.id] ??= 0;
+    clampQueue(system.id, regionId);
+  });
+  if (!areRegionsEnabled()) {
+    data.queues[system.id] ??= 0;
+    clampQueue(system.id, GLOBAL_REGION_SCOPE_ID);
+  }
+}
+
+function removeSystemFromRegion(system, regionId) {
+  system.regionIds = getSystemRegionIds(system).filter((id) => id !== regionId);
+  delete getScopedQueues(regionId)[system.id];
+  pruneSystemCoverageToRegions(system);
+}
+
+function getRegionById(regionId) {
+  const normalizedId = String(regionId || "");
+  return data?.regions?.find((region) => region.id === normalizedId)
+    || DEFAULT_REGIONS.find((region) => region.id === normalizedId)
+    || null;
+}
+
+function getDefaultRegionCoverageWindow(regionId = GLOBAL_REGION_SCOPE_ID, name = "") {
+  const defaultRegion = DEFAULT_REGIONS.find((region) => region.id === regionId)
+    || DEFAULT_REGIONS.find((region) => region.name.toLowerCase() === String(name).toLowerCase());
+  return {
+    coverageStart: defaultRegion?.coverageStart || "07:00",
+    coverageEnd: defaultRegion?.coverageEnd || "19:00"
+  };
+}
+
+function getRegionCoverageWindow(regionId) {
+  const region = getRegionById(regionId);
+  const fallback = getDefaultRegionCoverageWindow(regionId, region?.name);
+  return {
+    start: isValidTimeInput(region?.coverageStart || "") ? region.coverageStart : fallback.coverageStart,
+    end: isValidTimeInput(region?.coverageEnd || "") ? region.coverageEnd : fallback.coverageEnd
+  };
+}
+
+function formatRegionCoverageWindow(regionId, date = getScheduleReferenceDate()) {
+  const coverageWindow = getRegionCoverageWindow(regionId);
+  const abbreviation = getSelectedTimezoneAbbreviationForEasternTime(date, coverageWindow.start);
+  return `${formatEasternTimeInputForDisplay(date, coverageWindow.start)}–${formatEasternTimeInputForDisplay(date, coverageWindow.end)} ${abbreviation}`;
+}
+
+function getTimeRangeDurationMinutes(start, end) {
+  if (!isValidTimeInput(start || "") || !isValidTimeInput(end || "")) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const startMinutes = toMinutes(start);
+  const endMinutes = toMinutes(end);
+  const duration = endMinutes - startMinutes;
+  return duration > 0 ? duration : duration + 24 * 60;
+}
+
+function isValidScheduleTimeRange(start, end) {
+  return isValidTimeRangeWithinDuration(start, end, MAX_SCHEDULE_DURATION_MINUTES);
+}
+
+function isValidRegionCoverageTimeRange(start, end) {
+  return isValidTimeRangeWithinDuration(start, end, MAX_REGION_COVERAGE_MINUTES);
+}
+
+function isValidTimeRangeWithinDuration(start, end, maxDurationMinutes) {
+  const duration = getTimeRangeDurationMinutes(start, end);
+  return Number.isFinite(duration) && duration > 0 && duration <= maxDurationMinutes;
+}
+
+function formatDurationMinutes(totalMinutes) {
+  if (!Number.isFinite(totalMinutes)) {
+    return "Invalid duration";
+  }
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (minutes === 0) {
+    return `${hours}h`;
+  }
+
+  return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+}
+
+function createDefaultRegionShiftTemplates(regionId = GLOBAL_REGION_SCOPE_ID) {
+  const region = getRegionById(regionId);
+  if (!region) {
+    const baseShiftTemplates = Array.isArray(data?.shiftTemplates) && data.shiftTemplates.length > 0
+      ? data.shiftTemplates
+      : DEFAULT_SHIFT_TEMPLATES;
+    return cloneData(baseShiftTemplates);
+  }
+
+  const coverageWindow = getRegionCoverageWindow(region.id);
+  return [{
+    id: `${region.id}-coverage`,
+    name: `${region.name} region hours`,
+    start: coverageWindow.start,
+    end: coverageWindow.end
+  }];
+}
+
+function createQueuesForSystems(systems = []) {
+  return systems.reduce((queues, system) => {
+    queues[system.id] = 0;
+    return queues;
+  }, {});
 }
 
 const DEFAULT_SHIFT_TEMPLATES = [
@@ -103,7 +513,7 @@ const ASSIGNMENT_RULE_PRESETS = [
   {
     id: "expertise-first",
     name: "SME order",
-    rules: ["schedule", "queuePriority", "teamPriority"]
+    rules: ["queuePriority", "schedule", "teamPriority"]
   },
   {
     id: "schedule-first",
@@ -160,6 +570,7 @@ const defaultData = {
   displayTimezones: DEFAULT_DISPLAY_TIMEZONES,
   incidentConfig: DEFAULT_INCIDENT_CONFIG,
   regions: DEFAULT_REGIONS,
+  regionalSettings: {},
   delegationSlots: [],
   delegations: [],
   exceptions: [],
@@ -188,10 +599,14 @@ let editingAssignmentId = null;
 let pendingServiceNowAssignmentId = null;
 let editingSchedule = null;
 let selectedAssignmentPolicyId = null;
+let selectedAssignmentRegionId = GLOBAL_REGION_SCOPE_ID;
+let selectedAdminRegionId = GLOBAL_REGION_SCOPE_ID;
 let pendingRemoveUserId = null;
 let pendingRemoveShiftId = null;
+let pendingRemoveShiftRegionId = GLOBAL_REGION_SCOPE_ID;
 let pendingRemoveSchedule = null;
 let pendingRemoveHolidayId = null;
+let pendingRemoveHolidayRegionId = GLOBAL_REGION_SCOPE_ID;
 let shiftAddFormOpen = false;
 let selectedDisplayTimezoneId = loadDisplayTimezone();
 let devModeUnlocked = initialDevModeRequested && Boolean(debugTimeOverride);
@@ -199,8 +614,11 @@ let adminTimeInputsInitialized = false;
 let timelineDrafts = [];
 let timelineDrag = null;
 const OTHER_ADMIN_TABS = ["rules", "users", "regions", "shifts", "systems", "timezones", "incidents", "data"];
+const REGION_SCOPED_ADMIN_TABS = new Set(["schedules", "users", "rules", "shifts", "systems", "holidays"]);
+const REGION_REQUIRED_ADMIN_TABS = new Set(["rules"]);
 const unlockedAdminTabs = new Set();
 let saveToastTimer = null;
+let activeAdminTabId = "schedules";
 
 const elements = {
   displayTimezoneSelect: document.querySelector("#displayTimezoneSelect"),
@@ -215,6 +633,9 @@ const elements = {
   cancelDevModeButton: document.querySelector("#cancelDevModeButton"),
   confirmDevModeButton: document.querySelector("#confirmDevModeButton"),
   otherAdminSelect: document.querySelector("#otherAdminSelect"),
+  adminRegionScopeCard: document.querySelector("#adminRegionScopeCard"),
+  adminRegionScopeSelect: document.querySelector("#adminRegionScopeSelect"),
+  adminRegionScopeHint: document.querySelector("#adminRegionScopeHint"),
   saveToast: document.querySelector("#saveToast"),
   saveToastText: document.querySelector("#saveToastText"),
   syncStateModal: document.querySelector("#syncStateModal"),
@@ -248,6 +669,8 @@ const elements = {
   adminToggleButton: document.querySelector("#adminToggleButton"),
   adminPanel: document.querySelector("#adminPanel"),
   closeAdminButton: document.querySelector("#closeAdminButton"),
+  assignmentRegionField: document.querySelector("#assignmentRegionField"),
+  assignmentRegionSelect: document.querySelector("#assignmentRegionSelect"),
   assignmentSystemSelect: document.querySelector("#assignmentSystemSelect"),
   markAssignedButton: document.querySelector("#markAssignedButton"),
   assignmentConfirmation: document.querySelector("#assignmentConfirmation"),
@@ -265,15 +688,20 @@ const elements = {
   recentAssignmentsPanel: document.querySelector("#recentAssignmentsPanel"),
   activityPanelSection: document.querySelector("#activityPanelSection"),
   toggleQueueDashboardButton: document.querySelector("#toggleQueueDashboardButton"),
+  queueDashboardRegionField: document.querySelector("#queueDashboardRegionField"),
+  queueDashboardRegionSelect: document.querySelector("#queueDashboardRegionSelect"),
   queueDashboardPanel: document.querySelector("#queueDashboardPanel"),
   queueDashboardList: document.querySelector("#queueDashboardList"),
   toggleRecentAssignmentsButton: document.querySelector("#toggleRecentAssignmentsButton"),
   assignmentLog: document.querySelector("#assignmentLog"),
   addUserForm: document.querySelector("#addUserForm"),
   userNameInput: document.querySelector("#userNameInput"),
+  usersScopeMeta: document.querySelector("#usersScopeMeta"),
   usersList: document.querySelector("#usersList"),
   addRegionForm: document.querySelector("#addRegionForm"),
   regionNameInput: document.querySelector("#regionNameInput"),
+  regionCoverageStartInput: document.querySelector("#regionCoverageStartInput"),
+  regionCoverageEndInput: document.querySelector("#regionCoverageEndInput"),
   regionsEnabledInput: document.querySelector("#regionsEnabledInput"),
   regionsEnabledLabel: document.querySelector("#regionsEnabledLabel"),
   regionsList: document.querySelector("#regionsList"),
@@ -295,7 +723,9 @@ const elements = {
   shiftStartInput: document.querySelector("#shiftStartInput"),
   shiftEndInput: document.querySelector("#shiftEndInput"),
   shiftsList: document.querySelector("#shiftsList"),
+  shiftsScopeMeta: document.querySelector("#shiftsScopeMeta"),
   assignmentRulesForm: document.querySelector("#assignmentRulesForm"),
+  assignmentRulesScopeMeta: document.querySelector("#assignmentRulesScopeMeta"),
   assignmentPolicyDescriptions: document.querySelector("#assignmentPolicyDescriptions"),
   scheduleViewSelect: document.querySelector("#scheduleViewSelect"),
   graphDateLabel: document.querySelector("#graphDateLabel"),
@@ -330,7 +760,6 @@ const elements = {
   delegationEndLabel: document.querySelector("#delegationEndLabel"),
   delegationNoteInput: document.querySelector("#delegationNoteInput"),
   delegationViewSelect: document.querySelector("#delegationViewSelect"),
-  delegationGraphTitle: document.querySelector("#delegationGraphTitle"),
   delegationGraphDateLabel: document.querySelector("#delegationGraphDateLabel"),
   delegationGraphDateInput: document.querySelector("#delegationGraphDateInput"),
   delegationCanvas: document.querySelector("#delegationCanvas"),
@@ -348,6 +777,7 @@ const elements = {
   addSystemForm: document.querySelector("#addSystemForm"),
   systemNameInput: document.querySelector("#systemNameInput"),
   systemsList: document.querySelector("#systemsList"),
+  systemsScopeMeta: document.querySelector("#systemsScopeMeta"),
   addHolidayForm: document.querySelector("#addHolidayForm"),
   holidayUserSelect: document.querySelector("#holidayUserSelect"),
   holidayDateInput: document.querySelector("#holidayDateInput"),
@@ -429,6 +859,9 @@ function bindEvents() {
       activateTab(elements.otherAdminSelect.value);
     }
   });
+  on(elements.adminRegionScopeSelect, "change", changeAdminRegionScope);
+  on(elements.assignmentRegionSelect, "change", changeAssignmentRegion);
+  on(elements.queueDashboardRegionSelect, "change", changeQueueDashboardRegion);
 
   on(elements.assignmentSystemSelect, "change", () => {
     clearSelectedAssignee();
@@ -545,6 +978,7 @@ function bindEvents() {
   });
   on(elements.delegationViewSelect, "change", renderDelegations);
   on(elements.delegationGraphDateInput, "change", renderDelegations);
+  on(elements.delegationCanvas, "change", handleDelegationOwnerSelectChange);
   on(elements.delegationStartInput, "input", updateForwardTimeInputConstraints);
   on(elements.delegationEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.addSlotForm, "submit", addTimelineSlot);
@@ -692,6 +1126,8 @@ function applyTheme(theme) {
 }
 
 function activateTab(tabName) {
+  activeAdminTabId = tabName;
+
   document.querySelectorAll(".tab-button").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tabName);
   });
@@ -706,6 +1142,11 @@ function activateTab(tabName) {
     panel.classList.toggle("active", panel.id === `${tabName}Tab`);
   });
 
+  renderRegionScopeControls();
+  if (activeAdminTabId === "rules") {
+    selectedAssignmentPolicyId = null;
+    renderAssignmentRules();
+  }
   renderAdminLocks();
 }
 
@@ -713,6 +1154,7 @@ function render() {
   normalizeData();
   setDefaultDates();
   initializeAdminTimeInputs();
+  renderRegionScopeControls();
   renderSystemSelect();
   renderUserSelectors();
   renderShiftTemplateSelect();
@@ -737,9 +1179,148 @@ function render() {
   renderAdminLocks();
 }
 
+function renderRegionScopeControls() {
+  selectedAssignmentRegionId = normalizeRegionScopeId(selectedAssignmentRegionId);
+  selectedAdminRegionId = normalizeAdminRegionScopeId(selectedAdminRegionId);
+  renderRegionScopeSelect(elements.assignmentRegionSelect, selectedAssignmentRegionId, elements.assignmentRegionField);
+  renderRegionScopeSelect(elements.queueDashboardRegionSelect, selectedAssignmentRegionId, elements.queueDashboardRegionField);
+  renderAdminRegionScopeControl();
+}
+
+function normalizeAdminRegionScopeId(regionId, tabId = activeAdminTabId) {
+  const normalizedId = normalizeRegionScopeId(regionId);
+  if (hasRegionalScopes() && REGION_REQUIRED_ADMIN_TABS.has(tabId)) {
+    return normalizedId || data.regions[0]?.id || GLOBAL_REGION_SCOPE_ID;
+  }
+
+  return normalizedId;
+}
+
+function renderAdminRegionScopeControl() {
+  if (!elements.adminRegionScopeSelect) {
+    return;
+  }
+
+  const showAdminRegionScope = hasRegionalScopes() && REGION_SCOPED_ADMIN_TABS.has(activeAdminTabId);
+  elements.adminRegionScopeCard?.classList.toggle("hidden", !showAdminRegionScope);
+  if (!showAdminRegionScope) {
+    elements.adminRegionScopeSelect.innerHTML = "";
+    if (elements.adminRegionScopeHint) {
+      elements.adminRegionScopeHint.textContent = "";
+    }
+    return;
+  }
+
+  const requiresRegionScope = REGION_REQUIRED_ADMIN_TABS.has(activeAdminTabId);
+  selectedAdminRegionId = normalizeAdminRegionScopeId(selectedAdminRegionId);
+  renderRegionScopeSelect(elements.adminRegionScopeSelect, selectedAdminRegionId, elements.adminRegionScopeCard, {
+    includeGlobal: !requiresRegionScope
+  });
+  renderAdminRegionScopeCopy();
+}
+
+function renderRegionScopeSelect(select, selectedRegionId, container = null, settings = {}) {
+  if (!select) {
+    return;
+  }
+
+  const includeGlobalOption = settings.includeGlobal !== false;
+  const showRegionSelector = hasRegionalScopes();
+  container?.classList.toggle("hidden", !showRegionSelector);
+  if (!showRegionSelector) {
+    select.innerHTML = "";
+    select.value = GLOBAL_REGION_SCOPE_ID;
+    return;
+  }
+
+  const normalizedSelection = includeGlobalOption
+    ? normalizeRegionScopeId(selectedRegionId)
+    : normalizeAdminRegionScopeId(selectedRegionId);
+  const optionHtml = [
+    ...(includeGlobalOption ? [`<option value="${GLOBAL_REGION_SCOPE_ID}">${escapeHtml(GLOBAL_REGION_SCOPE_NAME)}</option>`] : []),
+    ...data.regions.map((region) => `<option value="${escapeHtml(region.id)}">${escapeHtml(region.name)}</option>`)
+  ];
+  select.innerHTML = optionHtml.join("");
+  select.value = normalizedSelection;
+}
+
+function changeAssignmentRegion() {
+  selectedAssignmentRegionId = normalizeRegionScopeId(elements.assignmentRegionSelect?.value);
+  clearSelectedAssignee();
+  lastAssignmentId = null;
+  renderSystemSelect();
+  renderClockAndAssignment();
+}
+
+function changeQueueDashboardRegion() {
+  selectedAssignmentRegionId = normalizeRegionScopeId(elements.queueDashboardRegionSelect?.value);
+  clearSelectedAssignee();
+  lastAssignmentId = null;
+  renderSystemSelect();
+  renderClockAndAssignment();
+}
+
+function changeAdminRegionScope() {
+  selectedAdminRegionId = normalizeAdminRegionScopeId(elements.adminRegionScopeSelect?.value);
+  selectedAssignmentPolicyId = null;
+  editingSchedule = null;
+  timelineDrafts = [];
+  shiftAddFormOpen = false;
+  render();
+}
+
+function renderAdminRegionScopeCopy() {
+  const scopeLabel = getRegionScopeLabel(selectedAdminRegionId);
+  const coverageWindow = selectedAdminRegionId ? formatRegionCoverageWindow(selectedAdminRegionId, getScheduleReferenceDate()) : "";
+  if (elements.adminRegionScopeHint) {
+    elements.adminRegionScopeHint.textContent = getAdminRegionScopeHint(scopeLabel, coverageWindow);
+  }
+  if (elements.assignmentRulesScopeMeta) {
+    elements.assignmentRulesScopeMeta.textContent = `Editing rules for ${scopeLabel}.`;
+  }
+  if (elements.shiftsScopeMeta) {
+    elements.shiftsScopeMeta.textContent = selectedAdminRegionId
+      ? ""
+      : hasRegionalScopes()
+        ? ""
+        : "Editing global shift presets.";
+  }
+  if (elements.systemsScopeMeta) {
+    const systemsScopeCopy = selectedAdminRegionId
+      ? ""
+      : "Pick one or more regions on each system. Coverage users come from the selected system regions.";
+    elements.systemsScopeMeta.textContent = systemsScopeCopy;
+    elements.systemsScopeMeta.classList.toggle("hidden", !systemsScopeCopy);
+  }
+}
+
+function getAdminRegionScopeHint(scopeLabel, coverageWindow) {
+  const copy = {
+    schedules: selectedAdminRegionId
+      ? `Showing ${scopeLabel} schedules and graph. Graph timeline limits: ${coverageWindow}.`
+      : "",
+    users: selectedAdminRegionId
+      ? ""
+      : "Global team view: all users with regional breakdowns. Pick a region to manage only that region’s members.",
+    rules: `Editing assignment rules for ${scopeLabel}.`,
+    shifts: selectedAdminRegionId
+      ? `Editing ${scopeLabel} shift presets. Default region-hours preset: ${coverageWindow}.`
+      : "Global shifts view: default shift presets. Pick a region to edit that region’s shift presets.",
+    systems: selectedAdminRegionId
+      ? `Showing coverage systems attached to ${scopeLabel}. Coverage users come from this region’s team.`
+      : "Global coverage view: all systems. Pick one or more regions on each system, or pick a region to manage its systems.",
+    holidays: selectedAdminRegionId
+      ? `Editing holidays for ${scopeLabel}. “All users” applies only to this region.`
+      : ""
+  };
+
+  return copy[activeAdminTabId] || "";
+}
+
 function renderClockAndAssignment() {
   const easternNow = getEasternNow();
-  const activityNow = getEffectiveQueueNow(easternNow);
+  const activityNow = getEffectiveQueueNow(easternNow, selectedAssignmentRegionId);
+  renderRegionScopeControls();
   renderDebugTimeControls(easternNow);
   renderDisplayTimezoneSelect(easternNow);
 
@@ -747,7 +1328,7 @@ function renderClockAndAssignment() {
     return;
   }
 
-  const shiftOrderMode = isShiftOrderPolicy();
+  const shiftOrderMode = isShiftOrderPolicy(selectedAssignmentRegionId);
   const hasQueueContext = shiftOrderMode || Boolean(elements.assignmentSystemSelect.value);
   setAssignmentPickerVisible(!shiftOrderMode);
   setAssignmentSectionsVisible(hasQueueContext);
@@ -767,7 +1348,7 @@ function renderClockAndAssignment() {
     return;
   }
 
-  const queueState = getQueueState(getAssignmentQueueSystemId(), easternNow);
+  const queueState = getQueueState(getAssignmentQueueSystemId(), easternNow, selectedAssignmentRegionId);
   if (!queueState.rows.some((row) => row.user.id === selectedAssigneeId && row.selectable)) {
     selectedAssigneeId = queueState.recommendedRow?.user.id ?? null;
     selectedOtherAssigneeId = null;
@@ -880,7 +1461,6 @@ function renderAdminTimezoneLabels() {
     [elements.slotEndLabel, `End ${abbreviation}`],
     [elements.delegationStartLabel, `Start ${delegationAbbreviation}`],
     [elements.delegationEndLabel, `End ${delegationAbbreviation}`],
-    [elements.delegationGraphTitle, `Delegation ownership (${delegationAbbreviation})`],
     [elements.shiftStartLabel, `Start ${abbreviation}`],
     [elements.shiftEndLabel, `End ${abbreviation}`]
   ];
@@ -1215,6 +1795,7 @@ function renderSystemSelect() {
   }
 
   const selectedValue = elements.assignmentSystemSelect.value;
+  const systems = getScopedSystems(selectedAssignmentRegionId);
   elements.assignmentSystemSelect.innerHTML = "";
 
   const placeholder = document.createElement("option");
@@ -1222,14 +1803,14 @@ function renderSystemSelect() {
   placeholder.textContent = "Select coverage";
   elements.assignmentSystemSelect.append(placeholder);
 
-  data.systems.forEach((system) => {
+  systems.forEach((system) => {
     const option = document.createElement("option");
     option.value = system.id;
     option.textContent = system.name;
     elements.assignmentSystemSelect.append(option);
   });
 
-  if (data.systems.some((system) => system.id === selectedValue)) {
+  if (systems.some((system) => system.id === selectedValue)) {
     elements.assignmentSystemSelect.value = selectedValue;
   } else {
     elements.assignmentSystemSelect.value = "";
@@ -1237,13 +1818,44 @@ function renderSystemSelect() {
 }
 
 function renderUserSelectors() {
-  fillUserSelect(elements.scheduleUserSelect);
-  fillUserSelect(elements.timelineUserSelect);
-  fillUserSelect(elements.holidayUserSelect, true);
+  fillUserSelect(elements.scheduleUserSelect, false, "", selectedAdminRegionId);
+  fillUserSelect(elements.timelineUserSelect, false, "", selectedAdminRegionId);
+  fillHolidayUserSelect();
   fillUserSelect(elements.delegationUserSelect, false, "Unassigned");
 }
 
-function fillUserSelect(select, includeAllUsers = false, placeholderLabel = "") {
+function fillHolidayUserSelect() {
+  if (!elements.holidayUserSelect) {
+    return;
+  }
+
+  if (areRegionsEnabled() && !selectedAdminRegionId) {
+    fillGlobalHolidayUserSelect(elements.holidayUserSelect);
+    return;
+  }
+
+  const includeAllUsers = !areRegionsEnabled() || Boolean(selectedAdminRegionId);
+  const allUsersLabel = selectedAdminRegionId
+    ? `All users in ${getRegionScopeLabel(selectedAdminRegionId)}`
+    : "All users";
+  fillUserSelect(elements.holidayUserSelect, includeAllUsers, "", selectedAdminRegionId, allUsersLabel);
+}
+
+function fillGlobalHolidayUserSelect(select) {
+  const selectedValue = select.value;
+  select.innerHTML = "";
+
+  data.regions.forEach((region) => {
+    appendSelectOption(select, getRegionHolidaySelectValue(region.id), `All users in ${region.name}`);
+  });
+  getRankedUsersForRegionScope(GLOBAL_REGION_SCOPE_ID).forEach((user) => {
+    appendSelectOption(select, user.id, user.name);
+  });
+
+  restoreSelectValue(select, selectedValue);
+}
+
+function fillUserSelect(select, includeAllUsers = false, placeholderLabel = "", regionId = GLOBAL_REGION_SCOPE_ID, allUsersLabel = "All users") {
   if (!select) {
     return;
   }
@@ -1252,29 +1864,35 @@ function fillUserSelect(select, includeAllUsers = false, placeholderLabel = "") 
   select.innerHTML = "";
 
   if (placeholderLabel) {
-    const placeholderOption = document.createElement("option");
-    placeholderOption.value = "";
-    placeholderOption.textContent = placeholderLabel;
-    select.append(placeholderOption);
+    appendSelectOption(select, "", placeholderLabel);
   }
 
   if (includeAllUsers) {
-    const allOption = document.createElement("option");
-    allOption.value = GLOBAL_HOLIDAY_USER_ID;
-    allOption.textContent = "All users";
-    select.append(allOption);
+    appendSelectOption(select, GLOBAL_HOLIDAY_USER_ID, allUsersLabel);
   }
 
-  data.users.forEach((user) => {
-    const option = document.createElement("option");
-    option.value = user.id;
-    option.textContent = user.name;
-    select.append(option);
+  getRankedUsersForRegionScope(regionId).forEach((user) => {
+    appendSelectOption(select, user.id, user.name);
   });
 
+  restoreSelectValue(select, selectedValue);
+}
+
+function appendSelectOption(select, value, text) {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = text;
+  select.append(option);
+}
+
+function restoreSelectValue(select, selectedValue) {
   if ([...select.options].some((option) => option.value === selectedValue)) {
     select.value = selectedValue;
   }
+}
+
+function getRegionHolidaySelectValue(regionId) {
+  return `${REGION_HOLIDAY_USER_PREFIX}${regionId}`;
 }
 
 function fillCoverageSelect(select, includeAllCoverage = false) {
@@ -1292,7 +1910,7 @@ function fillCoverageSelect(select, includeAllCoverage = false) {
     select.append(allOption);
   }
 
-  data.systems.forEach((system) => {
+  getScopedSystems(selectedAdminRegionId).forEach((system) => {
     const option = document.createElement("option");
     option.value = system.id;
     option.textContent = system.name;
@@ -1312,12 +1930,13 @@ function renderShiftTemplateSelect() {
   const selectedValue = elements.shiftTemplateSelect.value || "regular";
   const date = getScheduleReferenceDate();
   const abbreviation = getSelectedTimezoneAbbreviationForDate(date);
+  const quickShiftOptions = getQuickShiftTemplateOptions(date, abbreviation);
   elements.shiftTemplateSelect.innerHTML = "";
 
-  data.shiftTemplates.forEach((template) => {
+  quickShiftOptions.forEach((quickShiftOption) => {
     const option = document.createElement("option");
-    option.value = template.id;
-    option.textContent = `${template.name} · ${formatEasternTimeInputForDisplay(date, template.start)}–${formatEasternTimeInputForDisplay(date, template.end)} ${abbreviation}`;
+    option.value = quickShiftOption.value;
+    option.textContent = quickShiftOption.label;
     elements.shiftTemplateSelect.append(option);
   });
 
@@ -1326,9 +1945,127 @@ function renderShiftTemplateSelect() {
   customOption.textContent = "Custom time";
   elements.shiftTemplateSelect.append(customOption);
 
-  elements.shiftTemplateSelect.value = data.shiftTemplates.some((template) => template.id === selectedValue)
-    ? selectedValue
+  const preferredValue = getPreferredQuickShiftValue(selectedValue, elements.scheduleUserSelect?.value, quickShiftOptions);
+  elements.shiftTemplateSelect.value = quickShiftOptions.some((quickShiftOption) => quickShiftOption.value === preferredValue)
+    ? preferredValue
     : "custom";
+}
+
+function getQuickShiftTemplateOptions(date, abbreviation) {
+  if (hasRegionalScopes() && !selectedAdminRegionId) {
+    return data.regions.flatMap((region) => getVisibleShiftTemplates(region.id).map((template) => ({
+      regionId: region.id,
+      templateId: template.id,
+      value: getShiftTemplateSelectValue(template.id, region.id),
+      label: `${region.name}: ${formatQuickShiftTemplateLabel(template, date, abbreviation)}`
+    })));
+  }
+
+  return getVisibleShiftTemplates(selectedAdminRegionId).map((template) => ({
+    regionId: normalizeRegionScopeId(selectedAdminRegionId),
+    templateId: template.id,
+    value: template.id,
+    label: formatQuickShiftTemplateLabel(template, date, abbreviation)
+  }));
+}
+
+function formatQuickShiftTemplateLabel(template, date, abbreviation) {
+  return `${template.name} · ${formatEasternTimeInputForDisplay(date, template.start)}–${formatEasternTimeInputForDisplay(date, template.end)} ${abbreviation}`;
+}
+
+function getShiftTemplateSelectValue(templateId, regionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  return normalizedRegionId
+    ? `${normalizedRegionId}${SHIFT_TEMPLATE_SCOPE_SEPARATOR}${templateId}`
+    : templateId;
+}
+
+function parseShiftTemplateSelectValue(value, fallbackRegionId = selectedAdminRegionId) {
+  const rawValue = String(value || "");
+  const separatorIndex = rawValue.indexOf(SHIFT_TEMPLATE_SCOPE_SEPARATOR);
+  if (separatorIndex > 0) {
+    const regionId = normalizeRegionScopeId(rawValue.slice(0, separatorIndex));
+    const templateId = rawValue.slice(separatorIndex + SHIFT_TEMPLATE_SCOPE_SEPARATOR.length);
+    if (regionId && templateId) {
+      return { regionId, templateId };
+    }
+  }
+
+  return {
+    regionId: normalizeRegionScopeId(fallbackRegionId),
+    templateId: rawValue
+  };
+}
+
+function getPreferredQuickShiftValue(currentValue, userId, quickShiftOptions) {
+  if (quickShiftOptions.some((quickShiftOption) => quickShiftOption.value === currentValue)) {
+    return currentValue;
+  }
+
+  const parsedValue = parseShiftTemplateSelectValue(currentValue);
+  const templateId = parsedValue.templateId && parsedValue.templateId !== "custom"
+    ? parsedValue.templateId
+    : "regular";
+  const userRegionIds = getUserQuickShiftRegionIds(userId);
+  const sameRegionOption = userRegionIds
+    .map((regionId) => quickShiftOptions.find((quickShiftOption) => (
+      quickShiftOption.regionId === regionId
+        && quickShiftOption.templateId === templateId
+    )))
+    .find(Boolean);
+  if (sameRegionOption) {
+    return sameRegionOption.value;
+  }
+
+  const sameTemplateOption = quickShiftOptions.find((quickShiftOption) => quickShiftOption.templateId === templateId);
+  if (sameTemplateOption) {
+    return sameTemplateOption.value;
+  }
+
+  return quickShiftOptions[0]?.value || "custom";
+}
+
+function getUserQuickShiftRegionIds(userId) {
+  const validRegionIds = new Set(data.regions.map((region) => region.id));
+  const user = data.users.find((item) => item.id === userId);
+  return Array.isArray(user?.regionIds)
+    ? user.regionIds.filter((regionId) => validRegionIds.has(regionId))
+    : [];
+}
+
+function getDefaultQuickShiftTemplateForUser(userId) {
+  const regionIds = hasRegionalScopes() && !selectedAdminRegionId
+    ? getUserQuickShiftRegionIds(userId)
+    : [selectedAdminRegionId];
+  for (const regionId of regionIds) {
+    const shiftTemplates = getVisibleShiftTemplates(regionId);
+    const regularShift = shiftTemplates.find((template) => template.id === "regular");
+    if (regularShift) {
+      return regularShift;
+    }
+    if (shiftTemplates[0]) {
+      return shiftTemplates[0];
+    }
+  }
+
+  return null;
+}
+
+function getCurrentQuickShiftOptionsFromSelect() {
+  if (!elements.shiftTemplateSelect) {
+    return [];
+  }
+
+  return [...elements.shiftTemplateSelect.options]
+    .filter((option) => option.value !== "custom")
+    .map((option) => {
+      const parsedValue = parseShiftTemplateSelectValue(option.value);
+      return {
+        regionId: parsedValue.regionId,
+        templateId: parsedValue.templateId,
+        value: option.value
+      };
+    });
 }
 
 function renderShifts() {
@@ -1338,49 +2075,106 @@ function renderShifts() {
 
   const date = getScheduleReferenceDate();
   const abbreviation = getSelectedTimezoneAbbreviationForDate(date);
-  const rows = data.shiftTemplates.map((template) => {
-    const displayStart = formatEasternTimeInputForDisplay(date, template.start);
-    const displayEnd = formatEasternTimeInputForDisplay(date, template.end);
-    return `
-      <div class="shift-row" data-shift-id="${escapeHtml(template.id)}">
-        <div class="shift-row-fields">
-          <label class="field shift-name-control">
-            <span>Name</span>
-            <input class="shift-name-field" type="text" value="${escapeHtml(template.name)}">
-          </label>
-          <label class="field shift-time-control">
-            <span>Start ${escapeHtml(abbreviation)}</span>
-            <input class="shift-start-field" type="time" value="${escapeHtml(displayStart)}">
-          </label>
-          <label class="field shift-time-control">
-            <span>End ${escapeHtml(abbreviation)}</span>
-            <input class="shift-end-field" type="time" value="${escapeHtml(displayEnd)}" min="${escapeHtml(displayStart)}">
-          </label>
-        </div>
-        <div class="item-actions shift-row-actions">
-          <button class="small-button" type="button" data-action="update-shift" data-shift-id="${escapeHtml(template.id)}">Update</button>
-          <button class="remove-button" type="button" data-action="remove-shift" data-shift-id="${escapeHtml(template.id)}">Remove</button>
-        </div>
-      </div>
-    `;
-  }).join("");
+  const rows = shouldRenderGroupedRegionalShifts()
+    ? data.regions.map((region) => renderShiftRegionGroup(region, date, abbreviation)).join("")
+    : selectedAdminRegionId
+      ? renderShiftRegionGroup(getRegionById(selectedAdminRegionId), date, abbreviation)
+      : getVisibleShiftTemplates(selectedAdminRegionId)
+          .map((template) => renderShiftTemplateRow(template, selectedAdminRegionId, date, abbreviation))
+          .join("");
 
   elements.shiftsList.innerHTML = rows || emptyState("No shifts yet.");
-  elements.shiftsList.querySelectorAll(".shift-start-field").forEach((input) => {
-    input.addEventListener("input", () => {
-      const row = input.closest(".shift-row");
-      const endInput = row?.querySelector(".shift-end-field");
-      if (endInput) {
-        endInput.min = input.value || "";
-      }
-    });
+  elements.shiftsList.querySelectorAll("[data-action='update-shift-region-coverage']").forEach((button) => {
+    button.addEventListener("click", () => updateShiftRegionCoverage(button.dataset.regionId));
   });
   elements.shiftsList.querySelectorAll("[data-action='update-shift']").forEach((button) => {
-    button.addEventListener("click", () => updateShiftTemplate(button.dataset.shiftId));
+    button.addEventListener("click", () => updateShiftTemplate(button.dataset.shiftId, button.dataset.regionId));
   });
   elements.shiftsList.querySelectorAll("[data-action='remove-shift']").forEach((button) => {
-    button.addEventListener("click", () => removeShiftTemplate(button.dataset.shiftId));
+    button.addEventListener("click", () => removeShiftTemplate(button.dataset.shiftId, button.dataset.regionId));
   });
+}
+
+function shouldRenderGroupedRegionalShifts() {
+  return hasRegionalScopes() && !selectedAdminRegionId;
+}
+
+function renderShiftRegionGroup(region, date, abbreviation) {
+  if (!region) {
+    return "";
+  }
+
+  const shiftTemplates = getVisibleShiftTemplates(region.id);
+  const rows = shiftTemplates
+    .map((template) => renderShiftTemplateRow(template, region.id, date, abbreviation))
+    .join("");
+  return `
+    <section class="shift-region-group" data-shift-region-id="${escapeHtml(region.id)}">
+      <div class="shift-region-heading">
+        <div>
+          <h4>${escapeHtml(region.name)}</h4>
+          <span class="meta">${shiftTemplates.length} shift${shiftTemplates.length === 1 ? "" : "s"}</span>
+        </div>
+        ${renderShiftRegionBoundaryEditor(region, date, abbreviation)}
+      </div>
+      <div class="stack-list shift-region-list">
+        ${rows || emptyState(`No shifts configured for ${region.name}.`)}
+      </div>
+    </section>
+  `;
+}
+
+function renderShiftRegionBoundaryEditor(region, date, abbreviation) {
+  const coverageWindow = getRegionCoverageWindow(region.id);
+  return `
+    <div class="shift-region-boundary-editor">
+      <label class="field mini-field">
+        <span>Start ${escapeHtml(abbreviation)}</span>
+        <input type="time" value="${escapeHtml(formatEasternTimeInputForDisplay(date, coverageWindow.start))}" data-shift-region-coverage-start="${escapeHtml(region.id)}">
+      </label>
+      <label class="field mini-field">
+        <span>End ${escapeHtml(abbreviation)}</span>
+        <input type="time" value="${escapeHtml(formatEasternTimeInputForDisplay(date, coverageWindow.end))}" data-shift-region-coverage-end="${escapeHtml(region.id)}">
+      </label>
+      <button class="small-button" type="button" data-action="update-shift-region-coverage" data-region-id="${escapeHtml(region.id)}">Update</button>
+    </div>
+  `;
+}
+
+function getVisibleShiftTemplates(regionId = selectedAdminRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  return getScopedShiftTemplates(normalizedRegionId)
+    .filter((template) => !isRegionCoverageShiftTemplate(template, normalizedRegionId));
+}
+
+function renderShiftTemplateRow(template, regionId, date, abbreviation) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  const displayStart = formatEasternTimeInputForDisplay(date, template.start);
+  const displayEnd = formatEasternTimeInputForDisplay(date, template.end);
+  const durationLabel = formatDurationMinutes(getTimeRangeDurationMinutes(template.start, template.end));
+  return `
+    <div class="shift-row" data-shift-id="${escapeHtml(template.id)}" data-region-id="${escapeHtml(normalizedRegionId)}">
+      <div class="shift-row-fields">
+        <label class="field shift-name-control">
+          <span>Name</span>
+          <input class="shift-name-field" type="text" value="${escapeHtml(template.name)}">
+        </label>
+        <label class="field shift-time-control">
+          <span>Start ${escapeHtml(abbreviation)}</span>
+          <input class="shift-start-field" type="time" value="${escapeHtml(displayStart)}">
+        </label>
+        <label class="field shift-time-control">
+          <span>End ${escapeHtml(abbreviation)}</span>
+          <input class="shift-end-field" type="time" value="${escapeHtml(displayEnd)}">
+        </label>
+        <div class="meta shift-duration-label">${escapeHtml(durationLabel)}</div>
+      </div>
+      <div class="item-actions shift-row-actions">
+        <button class="small-button" type="button" data-action="update-shift" data-shift-id="${escapeHtml(template.id)}" data-region-id="${escapeHtml(normalizedRegionId)}">Update</button>
+        <button class="remove-button" type="button" data-action="remove-shift" data-shift-id="${escapeHtml(template.id)}" data-region-id="${escapeHtml(normalizedRegionId)}">Remove</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderShiftAddForm() {
@@ -1388,6 +2182,11 @@ function renderShiftAddForm() {
     return;
   }
 
+  const hideAddShift = shouldRenderGroupedRegionalShifts();
+  if (hideAddShift) {
+    shiftAddFormOpen = false;
+  }
+  elements.showAddShiftButton.classList.toggle("hidden", hideAddShift);
   elements.addShiftForm.classList.toggle("hidden", !shiftAddFormOpen);
   elements.showAddShiftButton.textContent = shiftAddFormOpen ? "Close" : "Add shift";
   elements.showAddShiftButton.setAttribute("aria-expanded", String(shiftAddFormOpen));
@@ -1395,6 +2194,10 @@ function renderShiftAddForm() {
 
 function toggleShiftAddForm() {
   if (!isAdminTabUnlocked("shifts")) {
+    return;
+  }
+  if (shouldRenderGroupedRegionalShifts()) {
+    showGenericAlert("Pick a region", "Choose a specific region before adding a shift preset.");
     return;
   }
 
@@ -1435,7 +2238,8 @@ function renderAssignmentRules() {
     return;
   }
 
-  selectedAssignmentPolicyId = getAssignmentRulePreset(selectedAssignmentPolicyId || data.assignmentRules?.preset).id;
+  const assignmentRules = getScopedAssignmentRules(selectedAdminRegionId);
+  selectedAssignmentPolicyId = getAssignmentRulePreset(selectedAssignmentPolicyId || assignmentRules?.preset).id;
   renderAssignmentPolicyDescriptions();
 }
 
@@ -1444,7 +2248,7 @@ function renderAssignmentPolicyDescriptions() {
     return;
   }
 
-  const selectedPreset = getAssignmentRulePreset(selectedAssignmentPolicyId || data.assignmentRules?.preset);
+  const selectedPreset = getAssignmentRulePreset(selectedAssignmentPolicyId || getScopedAssignmentRules(selectedAdminRegionId)?.preset);
   elements.assignmentPolicyDescriptions.innerHTML = ASSIGNMENT_RULE_PRESETS.map((preset) => {
     const selectedClass = preset.id === selectedPreset.id ? " selected" : "";
     const currentLabel = preset.id === selectedPreset.id ? "<span class=\"policy-current\">Selected</span>" : "";
@@ -1491,9 +2295,14 @@ function renderAdminLocks() {
       <div>
         <strong>${unlocked ? "Editing unlocked" : "Editing locked"}</strong>
       </div>
-      <button class="${unlocked ? "secondary-button" : "primary-button"}" type="button" data-lock-action="${unlocked ? "lock" : "unlock"}" data-tab="${escapeHtml(tabName)}">
-        ${unlocked ? "Lock" : "Unlock changes"}
-      </button>
+      <div class="admin-lock-actions">
+        <button class="secondary-button" type="button" data-lock-action="save" data-tab="${escapeHtml(tabName)}">
+          Save
+        </button>
+        <button class="${unlocked ? "secondary-button" : "primary-button"}" type="button" data-lock-action="${unlocked ? "lock" : "unlock"}" data-tab="${escapeHtml(tabName)}">
+          ${unlocked ? "Lock" : "Unlock changes"}
+        </button>
+      </div>
     `;
 
     panel.classList.toggle("is-locked", !unlocked);
@@ -1530,6 +2339,11 @@ function handleAdminLockAction(event) {
   }
 
   const tabName = button.dataset.tab;
+  if (button.dataset.lockAction === "save") {
+    completeDataSave("Saved.", { showToast: true });
+    return;
+  }
+
   if (button.dataset.lockAction === "unlock") {
     if (tabName === "data" && !unlockedAdminTabs.has("data")) {
       openBackupUnlockModal();
@@ -1575,10 +2389,6 @@ function isAdminTabUnlocked(tabName) {
 }
 
 function completeAdminSave(message = "Saved.", tabName = null) {
-  if (tabName) {
-    unlockedAdminTabs.delete(tabName);
-  }
-
   completeDataSave(message, { showToast: true });
 }
 
@@ -1598,6 +2408,9 @@ function completeDataSave(message = "Saved.", options = {}) {
     })
     .then((result) => {
       if (result.status !== "saved") {
+        if (typeof options.onNotSaved === "function") {
+          options.onNotSaved(result);
+        }
         return;
       }
 
@@ -1612,6 +2425,9 @@ function completeDataSave(message = "Saved.", options = {}) {
     })
     .catch((error) => {
       handleSharedStateSaveError(error);
+      if (typeof options.onNotSaved === "function") {
+        options.onNotSaved({ status: "error", error });
+      }
     });
 
   sharedStateSaveQueue = pendingSave.catch(() => {});
@@ -1641,12 +2457,12 @@ function getAssignmentRuleChain(preset) {
   return ALWAYS_ASSIGNMENT_RULES.concat(preset.rules);
 }
 
-function isShiftOrderPolicy() {
-  return getAssignmentRulePreset(data.assignmentRules?.preset).id === SHIFT_ORDER_PRESET_ID;
+function isShiftOrderPolicy(regionId = selectedAssignmentRegionId) {
+  return getAssignmentRulePreset(getScopedAssignmentRules(regionId)?.preset).id === SHIFT_ORDER_PRESET_ID;
 }
 
 function getAssignmentQueueSystemId() {
-  return isShiftOrderPolicy()
+  return isShiftOrderPolicy(selectedAssignmentRegionId)
     ? SHIFT_QUEUE_SYSTEM_ID
     : elements.assignmentSystemSelect?.value || "";
 }
@@ -1765,7 +2581,7 @@ function renderQueueDashboard(easternNow) {
     return;
   }
 
-  const shiftOrderMode = isShiftOrderPolicy();
+  const shiftOrderMode = isShiftOrderPolicy(selectedAssignmentRegionId);
   if (shiftOrderMode) {
     showQueueDashboard = false;
   }
@@ -1783,9 +2599,9 @@ function renderQueueDashboard(easternNow) {
     return;
   }
 
-  const cards = data.systems.map((system) => {
-    const queueState = getQueueState(system.id, easternNow);
-    const coverageTicketCount = getDailyCoverageAssignmentCount(system, queueState.effectiveNow.date);
+  const cards = getScopedSystems(selectedAssignmentRegionId).map((system) => {
+    const queueState = getQueueState(system.id, easternNow, selectedAssignmentRegionId);
+    const coverageTicketCount = getDailyCoverageAssignmentCount(system, queueState.effectiveNow.date, selectedAssignmentRegionId);
     const rows = queueState.rows.filter((row) => !row.isOther).map((row, index) => {
       const nextClass = index === 0 ? " next" : "";
       const metricText = `${row.dailyTickets} today · ${row.consecutiveTickets} in a row`;
@@ -1937,7 +2753,8 @@ function renderIncidentAction(entry) {
   }
 
   if (config.mode === "redirect") {
-    return "";
+    const incidentUrl = buildIncidentHandoffUrl(entry);
+    return `<a class="primary-button incident-action-link" href="${escapeHtml(incidentUrl)}" target="_blank" rel="noopener noreferrer">Open incident</a>`;
   }
 
   if (entry.serviceNowIncident?.payload) {
@@ -2089,7 +2906,7 @@ function getServiceNowConfigItemForAssignment(entry) {
     return assignmentConfigItem;
   }
 
-  const systemConfigItem = String(getAssignmentSystemById(entry?.systemId)?.serviceNowConfigItem || "").trim();
+  const systemConfigItem = String(getAssignmentSystemById(entry?.systemId, entry?.regionId)?.serviceNowConfigItem || "").trim();
   return systemConfigItem;
 }
 
@@ -2151,12 +2968,13 @@ function renderAssignmentConfirmation(hasSelectedSystem) {
 
 function renderAssignmentConfirmationItem(entry) {
   const devModeText = formatAssignmentDevModeText(entry);
+  const regionText = formatAssignmentRegionText(entry);
   const incidentAction = renderIncidentAction(entry);
   return `
     <div class="list-item assignment-log-item assignment-confirmation-item">
       <div>
         <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
-        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}${escapeHtml(devModeText)}</div>
+        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}${escapeHtml(regionText)}${escapeHtml(devModeText)}</div>
       </div>
       <div class="assignment-confirmation-actions">
         <span class="assignment-done-badge">Assigned</span>
@@ -2175,6 +2993,7 @@ function renderAssignmentListItem(entry, options = {}) {
   const amendedAt = formatAmendedTimestamp(entry);
   const amendedText = amendedAt ? ` · Amended ${amendedAt}` : "";
   const devModeText = formatAssignmentDevModeText(entry);
+  const regionText = formatAssignmentRegionText(entry);
   const doneBadge = options.showDoneBadge
     ? "<span class=\"assignment-done-badge\">Assigned</span>"
     : "";
@@ -2192,7 +3011,7 @@ function renderAssignmentListItem(entry, options = {}) {
     <div class="list-item assignment-log-item">
       <div>
         <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
-        <div class="meta">${escapeHtml(entry.systemName || "Removed system")} · ${escapeHtml(assignedAt)}${escapeHtml(devModeText)}${escapeHtml(amendedText)}</div>
+        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}${escapeHtml(regionText)} · ${escapeHtml(assignedAt)}${escapeHtml(devModeText)}${escapeHtml(amendedText)}</div>
       </div>
       ${doneBadge}
       ${actions}
@@ -2204,14 +3023,19 @@ function formatAssignmentDevModeText(entry) {
   return entry?.devMode ? " · Dev mode test time" : "";
 }
 
+function formatAssignmentRegionText(entry) {
+  return entry?.regionId ? ` · ${entry.regionName || getRegionScopeLabel(entry.regionId)}` : "";
+}
+
 function renderAssignmentEditor(entry) {
-  const shiftQueueOption = (isShiftOrderPolicy() || entry.systemId === SHIFT_QUEUE_SYSTEM_ID)
+  const entryRegionId = normalizeRegionScopeId(entry.regionId);
+  const shiftQueueOption = (isShiftOrderPolicy(entryRegionId) || entry.systemId === SHIFT_QUEUE_SYSTEM_ID)
     ? `<option value="${SHIFT_QUEUE_SYSTEM_ID}" ${entry.systemId === SHIFT_QUEUE_SYSTEM_ID ? "selected" : ""}>${SHIFT_QUEUE_SYSTEM_NAME}</option>`
     : "";
-  const systemOptions = shiftQueueOption + data.systems.map((system) => `
+  const systemOptions = shiftQueueOption + getScopedSystems(entryRegionId).map((system) => `
     <option value="${escapeHtml(system.id)}" ${system.id === entry.systemId ? "selected" : ""}>${escapeHtml(system.name)}</option>
   `).join("");
-  const userOptions = data.users.map((user) => `
+  const userOptions = getRankedUsersForRegionScope(entryRegionId).map((user) => `
     <option value="${escapeHtml(user.id)}" ${user.id === entry.userId ? "selected" : ""}>${escapeHtml(user.name)}</option>
   `).join("");
 
@@ -2292,8 +3116,9 @@ function saveAmendedAssignment(event) {
     return;
   }
 
-  const system = getAssignmentSystemById(getAssignmentEditValue(form, "systemId"));
-  const user = data.users.find((item) => item.id === getAssignmentEditValue(form, "userId"));
+  const entryRegionId = normalizeRegionScopeId(entry.regionId);
+  const system = getAssignmentSystemById(getAssignmentEditValue(form, "systemId"), entryRegionId);
+  const user = getUsersForRegionScope(entryRegionId).find((item) => item.id === getAssignmentEditValue(form, "userId"));
   if (!system || !user) {
     showGenericAlert("Invalid selection", "Choose a valid queue and user.");
     return;
@@ -2301,6 +3126,8 @@ function saveAmendedAssignment(event) {
 
   entry.systemId = system.id;
   entry.systemName = system.name;
+  entry.regionId = entryRegionId;
+  entry.regionName = getRegionScopeLabel(entryRegionId);
   entry.userId = user.id;
   entry.userName = user.name;
   entry.amendedAt = new Date().toISOString();
@@ -2351,29 +3178,12 @@ function renderUsers() {
     return;
   }
 
-  const rows = data.users.map((user, index) => {
-    const moveUpDisabled = index === 0 ? "disabled" : "";
-    const moveDownDisabled = index === data.users.length - 1 ? "disabled" : "";
-    const regionEditor = renderUserRegionEditor(user);
-    return `
-      <div class="list-item team-member-row">
-        <div class="team-rank">#${index + 1}</div>
-        <div class="team-member-main">
-          <div class="item-title">${escapeHtml(user.name)}</div>
-          ${regionEditor}
-        </div>
-        <div class="item-actions team-member-actions">
-          <button class="small-button hierarchy-button" type="button" data-action="move-team-user" data-user-id="${escapeHtml(user.id)}" data-direction="-1" aria-label="Move ${escapeHtml(user.name)} up" ${moveUpDisabled}>↑</button>
-          <button class="small-button hierarchy-button" type="button" data-action="move-team-user" data-user-id="${escapeHtml(user.id)}" data-direction="1" aria-label="Move ${escapeHtml(user.name)} down" ${moveDownDisabled}>↓</button>
-          <button class="remove-button team-remove-button" type="button" data-action="remove-user" data-user-id="${escapeHtml(user.id)}">Remove</button>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  elements.usersList.innerHTML = rows || emptyState("Add your first user.");
+  renderUsersScopeMeta();
+  elements.usersList.innerHTML = selectedAdminRegionId
+    ? renderRegionTeamList(selectedAdminRegionId)
+    : renderGlobalTeamBreakdown();
   elements.usersList.querySelectorAll("[data-action='move-team-user']").forEach((button) => {
-    button.addEventListener("click", () => moveTeamUser(button.dataset.userId, Number(button.dataset.direction)));
+    button.addEventListener("click", () => moveTeamUser(button.dataset.userId, Number(button.dataset.direction), button.dataset.regionId || GLOBAL_REGION_SCOPE_ID));
   });
   elements.usersList.querySelectorAll("[data-action='remove-user']").forEach((button) => {
     button.addEventListener("click", () => removeUser(button.dataset.userId));
@@ -2381,6 +3191,91 @@ function renderUsers() {
   elements.usersList.querySelectorAll("[data-action='toggle-user-region']").forEach((checkbox) => {
     checkbox.addEventListener("change", () => toggleUserRegion(checkbox.dataset.userId, checkbox.dataset.regionId, checkbox.checked));
   });
+}
+
+function renderUsersScopeMeta() {
+  if (!elements.usersScopeMeta) {
+    return;
+  }
+
+  if (!areRegionsEnabled() || data.regions.length === 0) {
+    elements.usersScopeMeta.textContent = "Showing the global team list.";
+    return;
+  }
+
+  elements.usersScopeMeta.textContent = selectedAdminRegionId
+    ? `Showing only users assigned to ${getRegionScopeLabel(selectedAdminRegionId)}. New users added here will be assigned to this region.`
+    : "Showing users grouped by region. Users assigned to multiple regions can appear in more than one group.";
+}
+
+function renderRegionTeamList(regionId) {
+  const regionUsers = getRankedUsersForRegionScope(regionId);
+  return regionUsers.map((user, index) => renderTeamMemberRow(user, { regionId, index, total: regionUsers.length })).join("")
+    || emptyState(`No users assigned to ${getRegionScopeLabel(regionId)}. Add a user here, or assign existing users to this region from All regions.`);
+}
+
+function renderGlobalTeamBreakdown() {
+  if (!areRegionsEnabled() || data.regions.length === 0) {
+    return data.users.map((user, index) => renderTeamMemberRow(user, { index, total: data.users.length })).join("")
+      || emptyState("Add your first user.");
+  }
+
+  const assignedUserIds = new Set();
+  const regionSections = data.regions.map((region) => {
+    const users = getRankedUsersForRegionScope(region.id);
+    users.forEach((user) => assignedUserIds.add(user.id));
+    const rows = users.map((user, index) => renderTeamMemberRow(user, { regionId: region.id, index, total: users.length })).join("")
+      || emptyState(`No users assigned to ${region.name}.`);
+    return `
+      <section class="team-region-section">
+        <div class="team-region-section-heading">
+          <h3>${escapeHtml(region.name)}</h3>
+          <span class="meta">${users.length} user${users.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="team-region-section-list">${rows}</div>
+      </section>
+    `;
+  }).join("");
+  const unassignedUsers = data.users.filter((user) => !assignedUserIds.has(user.id));
+  const unassignedSection = unassignedUsers.length > 0
+    ? `
+      <section class="team-region-section">
+        <div class="team-region-section-heading">
+          <h3>Unassigned</h3>
+          <span class="meta">${unassignedUsers.length} user${unassignedUsers.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="team-region-section-list">${unassignedUsers.map((user, index) => renderTeamMemberRow(user, { index, total: unassignedUsers.length })).join("")}</div>
+      </section>
+    `
+    : "";
+
+  return regionSections + unassignedSection;
+}
+
+function renderTeamMemberRow(user, options = {}) {
+  const regionId = normalizeRegionScopeId(options.regionId);
+  const rankedUsers = regionId ? getRankedUsersForRegionScope(regionId) : data.users;
+  const index = Number.isInteger(options.index) ? options.index : rankedUsers.findIndex((item) => item.id === user.id);
+  const total = Number.isInteger(options.total) ? options.total : rankedUsers.length;
+  const rankLabel = index >= 0 ? `#${index + 1}` : "#–";
+  const moveUpDisabled = index <= 0 ? "disabled" : "";
+  const moveDownDisabled = index < 0 || index === total - 1 ? "disabled" : "";
+  const regionAttribute = regionId ? ` data-region-id="${escapeHtml(regionId)}"` : "";
+  const regionEditor = renderUserRegionEditor(user);
+  return `
+    <div class="list-item team-member-row">
+      <div class="team-rank">${rankLabel}</div>
+      <div class="team-member-main">
+        <div class="item-title">${escapeHtml(user.name)}</div>
+        ${regionEditor}
+      </div>
+      <div class="item-actions team-member-actions">
+        <button class="small-button hierarchy-button" type="button" data-action="move-team-user" data-user-id="${escapeHtml(user.id)}"${regionAttribute} data-direction="-1" aria-label="Move ${escapeHtml(user.name)} up" ${moveUpDisabled}>↑</button>
+        <button class="small-button hierarchy-button" type="button" data-action="move-team-user" data-user-id="${escapeHtml(user.id)}"${regionAttribute} data-direction="1" aria-label="Move ${escapeHtml(user.name)} down" ${moveDownDisabled}>↓</button>
+        <button class="remove-button team-remove-button" type="button" data-action="remove-user" data-user-id="${escapeHtml(user.id)}">Remove</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderUserRegionEditor(user) {
@@ -2393,7 +3288,10 @@ function renderUserRegionEditor(user) {
   }
 
   const assignedRegions = new Set(user.regionIds || []);
-  const chips = data.regions.map((region) => `
+  const regions = selectedAdminRegionId
+    ? data.regions.filter((region) => region.id === selectedAdminRegionId)
+    : data.regions;
+  const chips = regions.map((region) => `
     <label class="region-chip">
       <input type="checkbox" data-action="toggle-user-region" data-user-id="${escapeHtml(user.id)}" data-region-id="${escapeHtml(region.id)}" ${assignedRegions.has(region.id) ? "checked" : ""}>
       <span>${escapeHtml(region.name)}</span>
@@ -2415,15 +3313,26 @@ function renderRegions() {
   if (elements.regionsEnabledLabel) {
     elements.regionsEnabledLabel.textContent = regionsEnabled ? "Yes" : "No";
   }
-  setRegionManagementEnabled(regionsEnabled);
-
   const rows = data.regions.map((region) => {
     const assignedCount = data.users.filter((user) => user.regionIds?.includes(region.id)).length;
+    const coverageWindow = getRegionCoverageWindow(region.id);
+    const abbreviation = getSelectedTimezoneAbbreviationForEasternTime(getScheduleReferenceDate(), coverageWindow.start);
     return `
       <div class="list-item region-row">
         <div>
           <div class="item-title">${escapeHtml(region.name)}</div>
-          <div class="meta">${assignedCount} user${assignedCount === 1 ? "" : "s"}</div>
+          <div class="meta">${assignedCount} user${assignedCount === 1 ? "" : "s"} assigned</div>
+        </div>
+        <div class="region-coverage-editor">
+          <label class="field mini-field">
+            <span>Start ${escapeHtml(abbreviation)}</span>
+            <input type="time" value="${escapeHtml(coverageWindow.start)}" data-region-coverage-start="${escapeHtml(region.id)}">
+          </label>
+          <label class="field mini-field">
+            <span>End ${escapeHtml(abbreviation)}</span>
+            <input type="time" value="${escapeHtml(coverageWindow.end)}" data-region-coverage-end="${escapeHtml(region.id)}">
+          </label>
+          <button class="small-button" type="button" data-action="update-region-coverage" data-region-id="${escapeHtml(region.id)}">Update</button>
         </div>
         <div class="item-actions">
           <button class="remove-button" type="button" data-action="remove-region" data-region-id="${escapeHtml(region.id)}">Remove</button>
@@ -2433,9 +3342,13 @@ function renderRegions() {
   }).join("");
 
   elements.regionsList.innerHTML = rows || emptyState("No regions defined yet.");
+  elements.regionsList.querySelectorAll("[data-action='update-region-coverage']").forEach((button) => {
+    button.addEventListener("click", () => updateRegionCoverage(button.dataset.regionId));
+  });
   elements.regionsList.querySelectorAll("[data-action='remove-region']").forEach((button) => {
     button.addEventListener("click", () => removeRegion(button.dataset.regionId));
   });
+  setRegionManagementEnabled(regionsEnabled);
 }
 
 function setRegionManagementEnabled(isEnabled) {
@@ -2499,6 +3412,7 @@ function renderTimeline() {
 }
 
 function renderDayScheduleGraph(date) {
+  const graphRange = getScheduleGraphTimeRange();
   const rows = getSortedGraphUserRowsForDate(date).map(({ user, graphBlocks }) => {
     const blocks = graphBlocks
       .map((block) => graphBlock(block))
@@ -2517,19 +3431,136 @@ function renderDayScheduleGraph(date) {
   }).join("");
 
   elements.timelineCanvas.className = "schedule-graph day-graph";
+  setScheduleGraphRangeStyle(graphRange);
   elements.timelineCanvas.innerHTML = `
     ${renderGraphTimeAxis(date)}
-    ${rows || emptyState("Add users before viewing schedules.")}
+    ${rows || emptyState(getScheduleGraphEmptyMessage())}
   `;
 }
 
 function renderGraphTimeAxis(date) {
-  const axisLabels = Array.from({ length: 9 }, (_, index) => {
-    const easternTime = minutesToTime(TIMELINE_START_MINUTES + index * 120);
-    return `<span>${escapeHtml(formatEasternTimeInputForDisplay(date, easternTime))}</span>`;
+  const graphRange = getScheduleGraphTimeRange();
+  const labelMinutes = [];
+  for (let minutes = graphRange.start; minutes <= graphRange.end; minutes += 120) {
+    labelMinutes.push(minutes);
+  }
+  if (labelMinutes[labelMinutes.length - 1] !== graphRange.end) {
+    labelMinutes.push(graphRange.end);
+  }
+  const axisLabels = labelMinutes.map((minutes, index) => {
+    const easternTime = graphMinutesToTime(minutes);
+    const axisDate = getGraphDateForMinutes(date, minutes);
+    const position = ((minutes - graphRange.start) / graphRange.duration) * 100;
+    const edgeClass = index === 0
+      ? " start"
+      : index === labelMinutes.length - 1
+        ? " end"
+        : "";
+    return `
+      <span class="graph-axis-tick${edgeClass}" style="left:${position}%;">
+        <span class="graph-axis-tick-label">${escapeHtml(formatEasternTimeInputForDisplay(axisDate, easternTime))}</span>
+      </span>
+    `;
   }).join("");
 
-  return `<div class="graph-time-axis">${axisLabels}</div>`;
+  return `
+    <div class="graph-time-axis">
+      <div class="graph-axis-spacer"></div>
+      <div class="graph-axis-track">${axisLabels}</div>
+    </div>
+  `;
+}
+
+function getScheduleGraphTimeRange(regionId = selectedAdminRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  if (!normalizedRegionId) {
+    return getGlobalScheduleGraphTimeRange();
+  }
+
+  const coverageWindow = getRegionCoverageWindow(normalizedRegionId);
+  return createPaddedGraphTimeRange(coverageWindow.start, coverageWindow.end);
+}
+
+function getGlobalScheduleGraphTimeRange() {
+  const americasRegion = findRegionByBoundary(["amer", "america"]);
+  const asiaRegion = findRegionByBoundary(["apac", "asia", "pacific"]);
+  if (!americasRegion && !asiaRegion) {
+    return createGraphTimeRange(0, 0);
+  }
+
+  if (americasRegion) {
+    const endMinutes = toMinutes(getRegionCoverageWindow(americasRegion.id).end) + SCHEDULE_GRAPH_PADDING_MINUTES;
+    return createGraphTimeRange(endMinutes - GLOBAL_SCHEDULE_GRAPH_DURATION_MINUTES, endMinutes);
+  }
+
+  const startMinutes = toMinutes(getRegionCoverageWindow(asiaRegion.id).start)
+    - SCHEDULE_GRAPH_PADDING_MINUTES
+    - 24 * 60;
+  return createGraphTimeRange(startMinutes, startMinutes + GLOBAL_SCHEDULE_GRAPH_DURATION_MINUTES);
+}
+
+function createPaddedGraphTimeRange(start, end) {
+  const startMinutes = toMinutes(start) - SCHEDULE_GRAPH_PADDING_MINUTES;
+  const endMinutes = toMinutes(end) + SCHEDULE_GRAPH_PADDING_MINUTES;
+  return toMinutes(end) <= toMinutes(start)
+    ? createGraphTimeRange(startMinutes - 24 * 60, endMinutes)
+    : createGraphTimeRange(startMinutes, endMinutes);
+}
+
+function findRegionByBoundary(keywords) {
+  if (!hasRegionalScopes()) {
+    return null;
+  }
+
+  return data.regions.find((region) => {
+    const haystack = `${region.id || ""} ${region.name || ""}`.toLowerCase();
+    return keywords.some((keyword) => haystack.includes(keyword));
+  }) || null;
+}
+
+function createGraphTimeRange(startMinutes, endMinutes) {
+  const duration = endMinutes > startMinutes
+    ? endMinutes - startMinutes
+    : endMinutes + 24 * 60 - startMinutes;
+  const safeDuration = Number.isFinite(duration) && duration > 0
+    ? duration
+    : TIMELINE_END_MINUTES - TIMELINE_START_MINUTES;
+  const end = startMinutes + safeDuration;
+  return {
+    start: startMinutes,
+    end,
+    duration: safeDuration,
+    startTime: graphMinutesToTime(startMinutes),
+    endTime: graphMinutesToTime(end)
+  };
+}
+
+function setScheduleGraphRangeStyle(graphRange = getScheduleGraphTimeRange()) {
+  const hours = graphRange.duration / 60;
+  const gridSize = Number.isFinite(hours) && hours > 0 ? 100 / hours : 6.25;
+  elements.timelineCanvas?.style.setProperty("--timeline-grid-size", `${gridSize}%`);
+}
+
+function clearScheduleGraphRangeStyle() {
+  elements.timelineCanvas?.style.removeProperty("--timeline-grid-size");
+}
+
+function graphMinutesToTime(totalMinutes) {
+  const normalized = ((Math.round(totalMinutes) % (24 * 60)) + 24 * 60) % (24 * 60);
+  return minutesToTime(normalized);
+}
+
+function getGraphDateForMinutes(date, totalMinutes) {
+  return formatDate(addDays(parseDate(date), Math.floor(totalMinutes / (24 * 60))));
+}
+
+function getGraphSourceDatesForRange(date, graphRange = getScheduleGraphTimeRange()) {
+  const startOffset = Math.floor(graphRange.start / (24 * 60));
+  const endOffset = Math.ceil(graphRange.end / (24 * 60)) - 1;
+  return Array.from(
+    { length: Math.max(endOffset - startOffset + 1, 1) },
+    (_, index) => formatDate(addDays(parseDate(date), startOffset + index))
+  );
 }
 
 function renderWeekScheduleGraph(date) {
@@ -2547,7 +3578,6 @@ function renderWeekScheduleGraph(date) {
     const cells = weekDates.map((weekDate) => {
       const day = getDayNameFromDate(weekDate);
       const blocks = getGraphBlocksForUser(user, weekDate, day)
-        .filter((block) => block.type !== "break")
         .map((block) => weekGraphPill(block))
         .join("");
 
@@ -2567,51 +3597,124 @@ function renderWeekScheduleGraph(date) {
   }).join("");
 
   elements.timelineCanvas.className = "schedule-graph week-graph";
+  clearScheduleGraphRangeStyle();
   elements.timelineCanvas.innerHTML = `
     <div class="week-row week-header">
       <div class="graph-user">User</div>
       ${header}
     </div>
-    ${rows || emptyState("Add users before viewing schedules.")}
+    ${rows || emptyState(getScheduleGraphEmptyMessage())}
   `;
 }
 
-function getGraphBlocksForUser(user, date, day) {
-  const holidays = getHolidaysForUser(user.id, date);
-  if (holidays.length > 0) {
-    return [{ type: "holiday", start: "06:00", end: "22:00", label: holidays.map((holiday) => holiday.name || "Holiday").join(", ") }];
+function getScheduleGraphEmptyMessage() {
+  if (selectedAdminRegionId) {
+    return `No users assigned to ${getRegionScopeLabel(selectedAdminRegionId)}. Region hours only set the graph timeline limits.`;
   }
 
-  const scheduleBlocks = getScheduleWindowsForDate(user, date, day)
+  return "Add users before viewing schedules.";
+}
+
+function getGraphBlocksForUser(user, date, day) {
+  const holidays = getHolidaysForUser(user.id, date, selectedAdminRegionId);
+  if (holidays.length > 0) {
+    const graphRange = getScheduleGraphTimeRange();
+    return [{
+      type: "holiday",
+      start: graphRange.startTime,
+      end: graphRange.endTime,
+      date,
+      graphStartMinutes: graphRange.start,
+      graphEndMinutes: graphRange.end,
+      label: holidays.map((holiday) => holiday.name || "Holiday").join(", ")
+    }];
+  }
+
+  const sourceDates = getGraphSourceDatesForRange(date);
+  const scheduleBlocks = getGraphScheduleBlocksForDate(user, date, day)
     .map((window) => ({
-      type: window.source === "extra" ? "extra" : "schedule",
+      type: "schedule",
       id: window.id,
       userId: user.id,
       date,
+      sourceDate: window.sourceDate || date,
+      removeDate: window.removeDate || window.sourceDate || date,
       start: window.start,
       end: window.end,
       priority: window.priority,
-      label: window.source === "extra" ? "Extra" : "Schedule"
+      label: "Schedule"
     }));
 
+  const extraBlocks = data.exceptions
+    .filter((slot) => slot.userId === user.id && sourceDates.includes(slot.date) && slot.type === "extra")
+    .map((slot) => ({
+      type: "extra",
+      id: slot.id,
+      userId: user.id,
+      date,
+      sourceDate: slot.date,
+      start: slot.start,
+      end: slot.end,
+      priority: Number.MAX_SAFE_INTEGER,
+      label: "Extra"
+    }))
+    .filter((block) => isGraphBlockVisible(block));
+
   const breakBlocks = data.exceptions
-    .filter((slot) => slot.userId === user.id && slot.date === date && slot.type === "break")
+    .filter((slot) => slot.userId === user.id && sourceDates.includes(slot.date) && slot.type === "break")
     .map((slot) => ({
       type: "break",
       id: slot.id,
       userId: user.id,
       date,
+      sourceDate: slot.date,
       start: slot.start,
       end: slot.end,
       label: slot.reason || "Break"
-    }));
+    }))
+    .filter((block) => isGraphBlockVisible(block));
 
-  return scheduleBlocks.concat(breakBlocks).sort((left, right) => toMinutes(left.start) - toMinutes(right.start));
+  return scheduleBlocks.concat(extraBlocks, breakBlocks).sort(compareGraphBlocks);
+}
+
+function getGraphScheduleBlocksForDate(user, date, day = getDayNameFromDate(date)) {
+  return user.schedules
+    .flatMap((schedule) => getGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day))
+    .sort(compareGraphBlocks);
+}
+
+function getGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date)) {
+  if (!isValidScheduleTimeRange(schedule.start, schedule.end)) {
+    return [];
+  }
+
+  if (!isScheduleActiveOnDate(schedule, date, day)) {
+    return [];
+  }
+
+  const sourceDate = getScheduleEndpointDate(date, schedule, "start", user);
+  const block = {
+    id: schedule.id,
+    source: "schedule",
+    date,
+    sourceDate,
+    removeDate: date,
+    start: schedule.start,
+    end: schedule.end
+  };
+
+  return isGraphBlockVisible(block) ? [block] : [];
+}
+
+function compareGraphBlocks(left, right) {
+  const leftRange = getGraphBlockAbsoluteRange(left);
+  const rightRange = getGraphBlockAbsoluteRange(right);
+  return (leftRange?.start ?? toGraphMinutes(left.start)) - (rightRange?.start ?? toGraphMinutes(right.start));
 }
 
 function getSortedGraphUserRowsForDate(date) {
   const day = getDayNameFromDate(date);
-  return data.users
+  return getRankedUsersForRegionScope(selectedAdminRegionId)
     .map((user, index) => {
       const graphBlocks = getGraphBlocksForUser(user, date, day);
       return {
@@ -2625,7 +3728,7 @@ function getSortedGraphUserRowsForDate(date) {
 }
 
 function getSortedGraphUserRowsForWeek(weekDates) {
-  return data.users
+  return getRankedUsersForRegionScope(selectedAdminRegionId)
     .map((user, index) => ({
       user,
       index,
@@ -2644,10 +3747,18 @@ function getGraphSortKey(blocks) {
 
   return coverageBlocks
     .map((block) => ({
-      start: toMinutes(block.start),
+      start: getGraphBlockSortStartMinutes(block),
       priority: Number(block.priority || Number.MAX_SAFE_INTEGER)
     }))
     .sort(compareGraphSortKeys)[0];
+}
+
+function getGraphBlockSortStartMinutes(block) {
+  const start = getGraphEndpointDisplayParts(block, "start");
+  const end = getGraphEndpointDisplayParts(block, "end");
+  const showDayOffsets = shouldShowGraphDayOffsets(start, end);
+  const anchorDayOffset = getGraphDayOffsetAnchor(start, end, showDayOffsets);
+  return (start.dayOffset - anchorDayOffset) * 24 * 60 + toMinutes(start.time);
 }
 
 function emptyGraphSortKey() {
@@ -2682,20 +3793,22 @@ function renderSlots() {
     return;
   }
 
-  const today = getEasternNow().date;
+  const visibleUserIds = new Set(getUsersForRegionScope(selectedAdminRegionId).map((user) => user.id));
+  const visibleSlotDates = getVisibleTimelineSlotDates();
   const rows = data.exceptions
     .slice()
-    .filter((slot) => isValidDateInput(slot.date || "") && slot.date >= today)
+    .filter((slot) => isValidDateInput(slot.date || "") && visibleSlotDates.has(slot.date) && visibleUserIds.has(slot.userId))
     .sort((left, right) => `${left.date} ${left.start}`.localeCompare(`${right.date} ${right.start}`))
     .map((slot) => {
       const user = data.users.find((item) => item.id === slot.userId);
       const abbreviation = getSelectedTimezoneAbbreviationForDate(slot.date);
       const start = formatEasternTimeInputForDisplay(slot.date, slot.start);
       const end = formatEasternTimeInputForDisplay(slot.date, slot.end);
+      const slotTypeLabel = slot.type === "extra" ? "Extra slot" : "Break";
       return `
         <div class="list-item">
           <div>
-            <div class="item-title">${escapeHtml(slot.reason || "No comment")}</div>
+            <div class="item-title">${escapeHtml(slotTypeLabel)} · ${escapeHtml(slot.reason || "No comment")}</div>
             <div class="meta">${escapeHtml(user?.name || "Removed user")} · ${formatDisplayDate(slot.date)} · ${start}–${end} ${escapeHtml(abbreviation)}</div>
           </div>
           <button class="remove-button" type="button" data-action="remove-slot" data-slot-id="${escapeHtml(slot.id)}">Remove</button>
@@ -2703,10 +3816,17 @@ function renderSlots() {
       `;
     }).join("");
 
-  elements.slotsList.innerHTML = rows || emptyState("No current or upcoming breaks or extra slots.");
+  elements.slotsList.innerHTML = rows || emptyState("No changes.");
   elements.slotsList.querySelectorAll("[data-action='remove-slot']").forEach((button) => {
     button.addEventListener("click", () => removeTimelineSlot(button.dataset.slotId));
   });
+}
+
+function getVisibleTimelineSlotDates() {
+  const date = elements.timelineDateInput?.value || getEasternNow().date;
+  const view = elements.scheduleViewSelect?.value || "week";
+  const dates = view === "week" ? getWeekDates(date) : [date];
+  return new Set(dates.flatMap((visibleDate) => getGraphSourceDatesForRange(visibleDate)));
 }
 
 function shouldShowServiceNowCoverageConfigItems() {
@@ -2720,7 +3840,20 @@ function renderSystems() {
   }
 
   const showServiceNowConfigItems = shouldShowServiceNowCoverageConfigItems();
-  const rows = data.systems.map((system) => {
+  const showSystemRegionControls = areRegionsEnabled() && !selectedAdminRegionId;
+  const systems = getScopedSystems(selectedAdminRegionId);
+  const rows = systems.map((system) => {
+    const systemRegionIds = getSystemRegionIds(system);
+    const systemRegionLabel = getSystemRegionLabel(system);
+    const coverageUsers = getSystemCoverageUsers(system);
+    const regionRows = areRegionsEnabled()
+      ? data.regions.map((region) => `
+        <label class="region-chip system-region-chip">
+          <input type="checkbox" data-action="toggle-system-region" data-system-id="${escapeHtml(system.id)}" data-region-id="${escapeHtml(region.id)}" ${systemRegionIds.includes(region.id) ? "checked" : ""}>
+          <span>${escapeHtml(region.name)}</span>
+        </label>
+      `).join("")
+      : "";
     const assignedRows = system.primaryUserIds.map((userId, index) => {
       const user = data.users.find((item) => item.id === userId);
       if (!user) {
@@ -2743,7 +3876,7 @@ function renderSystems() {
       `;
     }).join("");
 
-    const coverageRows = data.users.map((user) => `
+    const coverageRows = coverageUsers.map((user) => `
       <label class="coverage-chip">
         <input type="checkbox" data-action="toggle-coverage" data-system-id="${escapeHtml(system.id)}" data-user-id="${escapeHtml(user.id)}" ${system.primaryUserIds.includes(user.id) ? "checked" : ""}>
         <span>${escapeHtml(user.name)}</span>
@@ -2766,13 +3899,21 @@ function renderSystems() {
         <div class="system-card-header">
           <div>
             <h3>${escapeHtml(system.name)}</h3>
+            ${showSystemRegionControls ? `<div class="meta">Regions: ${escapeHtml(systemRegionLabel)}</div>` : ""}
           </div>
           <button class="remove-button subtle-danger" type="button" data-action="remove-system" data-system-id="${escapeHtml(system.id)}">Remove</button>
         </div>
         ${serviceNowConfigItemSection}
+        ${showSystemRegionControls ? `
+          <div class="coverage-section">
+            <div class="coverage-section-label">Regions</div>
+            <div class="region-tag-list system-region-grid">${regionRows}</div>
+            <div class="meta">Coverage users below come from the selected system regions.</div>
+          </div>
+        ` : ""}
         <div class="coverage-section">
-          <div class="coverage-section-label">Team</div>
-          <div class="coverage-grid">${coverageRows || emptyState("Add users first.")}</div>
+          <div class="coverage-section-label">Coverage users</div>
+          <div class="coverage-grid">${coverageRows || emptyState(areRegionsEnabled() ? "No users in selected system regions." : "Add users first.")}</div>
         </div>
         <div class="coverage-section">
           <div class="coverage-section-label">Priority order</div>
@@ -2785,6 +3926,9 @@ function renderSystems() {
   elements.systemsList.innerHTML = rows || emptyState("Add your first system/app.");
   elements.systemsList.querySelectorAll("[data-action='toggle-coverage']").forEach((checkbox) => {
     checkbox.addEventListener("change", () => toggleCoverage(checkbox.dataset.systemId, checkbox.dataset.userId, checkbox.checked));
+  });
+  elements.systemsList.querySelectorAll("[data-action='toggle-system-region']").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => toggleSystemRegion(checkbox.dataset.systemId, checkbox.dataset.regionId, checkbox.checked));
   });
   elements.systemsList.querySelectorAll("[data-action='move-user']").forEach((button) => {
     button.addEventListener("click", () => moveCoveredUser(button.dataset.systemId, button.dataset.userId, Number(button.dataset.direction)));
@@ -2805,25 +3949,81 @@ function renderHolidays() {
     return;
   }
 
-  const rows = data.holidays
+  if (areRegionsEnabled() && !selectedAdminRegionId) {
+    renderHolidayOverview();
+    return;
+  }
+
+  if (areRegionsEnabled() && selectedAdminRegionId) {
+    const individualRows = renderHolidayRows(
+      getGlobalIndividualHolidaysForRegion(selectedAdminRegionId),
+      GLOBAL_REGION_SCOPE_ID,
+      "Individual holidays"
+    );
+    const regionRows = renderHolidayRows(
+      getScopedHolidays(selectedAdminRegionId),
+      selectedAdminRegionId,
+      `${getRegionScopeLabel(selectedAdminRegionId)} holidays`
+    );
+    elements.holidaysList.innerHTML = individualRows || regionRows
+      ? `${individualRows}${regionRows}`
+      : emptyState("No holidays yet.");
+    bindHolidayRemoveButtons();
+    return;
+  }
+
+  elements.holidaysList.innerHTML = renderHolidayRows(getScopedHolidays(selectedAdminRegionId), selectedAdminRegionId)
+    || emptyState("No holidays yet.");
+  bindHolidayRemoveButtons();
+}
+
+function renderHolidayOverview() {
+  const individualRows = renderHolidayRows(
+    getGlobalIndividualHolidays(),
+    GLOBAL_REGION_SCOPE_ID,
+    "Individual holidays"
+  );
+  const regionRows = data.regions
+    .map((region) => renderHolidayRows(getScopedHolidays(region.id), region.id, `${region.name} holidays`))
+    .filter(Boolean)
+    .join("");
+
+  elements.holidaysList.innerHTML = individualRows || regionRows
+    ? `${individualRows}${regionRows}`
+    : emptyState("No holidays yet.");
+  bindHolidayRemoveButtons();
+}
+
+function renderHolidayRows(holidays, regionId = selectedAdminRegionId, heading = "") {
+  const rows = holidays
     .slice()
     .sort((left, right) => left.date.localeCompare(right.date))
     .map((holiday) => {
-      const userName = getHolidayUserName(holiday);
+      const userName = getHolidayUserName(holiday, regionId);
       return `
         <div class="list-item">
           <div>
             <div class="item-title">${escapeHtml(userName)}</div>
             <div class="meta">${escapeHtml(formatHolidayDate(holiday.date))} · ${escapeHtml(holiday.name || "Holiday")}</div>
           </div>
-          <button class="remove-button" type="button" data-action="remove-holiday" data-holiday-id="${escapeHtml(holiday.id)}">Remove</button>
+          <button class="remove-button" type="button" data-action="remove-holiday" data-holiday-id="${escapeHtml(holiday.id)}" data-region-id="${escapeHtml(regionId || GLOBAL_REGION_SCOPE_ID)}">Remove</button>
         </div>
       `;
     }).join("");
 
-  elements.holidaysList.innerHTML = rows || emptyState("No holidays yet.");
+  if (!rows) {
+    return "";
+  }
+
+  return `
+    ${heading ? `<div class="systems-list-heading">${escapeHtml(heading)}</div>` : ""}
+    ${rows}
+  `;
+}
+
+function bindHolidayRemoveButtons() {
   elements.holidaysList.querySelectorAll("[data-action='remove-holiday']").forEach((button) => {
-    button.addEventListener("click", () => removeHoliday(button.dataset.holidayId));
+    button.addEventListener("click", () => removeHoliday(button.dataset.holidayId, button.dataset.regionId));
   });
 }
 
@@ -3040,6 +4240,43 @@ function renderDelegationOwnerSelect(slot, date, delegation) {
       ${warning}
     </label>
   `;
+}
+
+function handleDelegationOwnerSelectChange(event) {
+  const select = event.target?.matches?.(".delegation-owner-select")
+    ? event.target
+    : null;
+  if (!select) {
+    return;
+  }
+
+  updateDelegationOwnerSelectState(select);
+}
+
+function updateDelegationOwnerSelectState(select) {
+  const field = select.closest?.(".delegation-owner-field");
+  if (!field) {
+    return;
+  }
+
+  const slot = getDelegationSlotById(select.dataset.slotId);
+  const date = select.dataset.date || "";
+  const user = getUserFromReference(select.value);
+  const eligibility = user
+    ? getDelegatorAssignmentEligibility(user, slot, date)
+    : { selectable: true, reason: "" };
+  const invalid = Boolean(user && !eligibility.selectable);
+
+  field.classList.toggle("invalid", invalid);
+  field.querySelector(".delegation-owner-warning")?.remove();
+  if (!invalid) {
+    return;
+  }
+
+  const warning = document.createElement("span");
+  warning.className = "delegation-owner-warning";
+  warning.textContent = eligibility.reason;
+  field.append(warning);
 }
 
 function renderDelegationAssignments(easternNow = getEasternNow()) {
@@ -3277,9 +4514,9 @@ function saveAssignmentRules(event) {
     return;
   }
 
-  data.assignmentRules = {
-    preset: getAssignmentRulePreset(selectedAssignmentPolicyId || data.assignmentRules?.preset).id
-  };
+  setScopedAssignmentRules(selectedAdminRegionId, {
+    preset: getAssignmentRulePreset(selectedAssignmentPolicyId || getScopedAssignmentRules(selectedAdminRegionId)?.preset).id
+  });
   completeAdminSave("Assignment rules saved.", "rules");
 }
 
@@ -3288,26 +4525,31 @@ function addShiftTemplate(event) {
   if (!isAdminTabUnlocked("shifts")) {
     return;
   }
+  if (shouldRenderGroupedRegionalShifts()) {
+    showGenericAlert("Pick a region", "Choose a specific region before adding a shift preset.");
+    return;
+  }
 
   const name = elements.shiftNameInput.value.trim();
   const displayStart = elements.shiftStartInput.value;
   const displayEnd = elements.shiftEndInput.value;
 
-  if (!name || !isForwardTimeRange(displayStart, displayEnd)) {
-    showGenericAlert("Invalid shift", "Add a shift name and make the start time earlier than the end time.");
+  if (!name || !isValidScheduleTimeRange(displayStart, displayEnd)) {
+    showGenericAlert("Invalid shift", "Add a shift name and keep the shift 12 hours or less. Overnight shifts are allowed.");
     return;
   }
 
   const date = getScheduleReferenceDate();
   const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
   const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
-  if (!isSameDayForwardEasternRange(convertedStart, convertedEnd)) {
-    showGenericAlert("Invalid shift", "Shift times must stay older-to-newer on the same Eastern day.");
+  if (!isValidScheduleTimeRange(convertedStart.time, convertedEnd.time)) {
+    showGenericAlert("Invalid shift", "Shift times must be 12 hours or less in Eastern Time.");
     return;
   }
 
-  data.shiftTemplates.push({
-    id: makeId(name, data.shiftTemplates.map((template) => template.id)),
+  const shiftTemplates = getScopedShiftTemplates(selectedAdminRegionId);
+  shiftTemplates.push({
+    id: makeId(name, shiftTemplates.map((template) => template.id)),
     name,
     start: convertedStart.time,
     end: convertedEnd.time
@@ -3318,13 +4560,19 @@ function addShiftTemplate(event) {
   completeAdminSave("Shift saved.", "shifts");
 }
 
-function updateShiftTemplate(shiftId) {
+function getShiftRowElement(shiftId, regionId = selectedAdminRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  return elements.shiftsList.querySelector(`[data-shift-id="${cssEscape(shiftId)}"][data-region-id="${cssEscape(normalizedRegionId)}"]`);
+}
+
+function updateShiftTemplate(shiftId, regionId = selectedAdminRegionId) {
   if (!isAdminTabUnlocked("shifts")) {
     return;
   }
 
-  const row = elements.shiftsList.querySelector(`[data-shift-id="${cssEscape(shiftId)}"]`);
-  const template = data.shiftTemplates.find((item) => item.id === shiftId);
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  const row = getShiftRowElement(shiftId, normalizedRegionId);
+  const template = getScopedShiftTemplates(normalizedRegionId).find((item) => item.id === shiftId);
   if (!row || !template) {
     return;
   }
@@ -3332,53 +4580,67 @@ function updateShiftTemplate(shiftId) {
   const name = row.querySelector(".shift-name-field").value.trim();
   const displayStart = row.querySelector(".shift-start-field").value;
   const displayEnd = row.querySelector(".shift-end-field").value;
+  const maxDurationMinutes = getShiftTemplateMaxDurationMinutes(template, normalizedRegionId);
+  const maxDurationLabel = formatDurationMinutes(maxDurationMinutes);
+  const isRegionCoverageTemplate = isRegionCoverageShiftTemplate(template, normalizedRegionId);
 
-  if (!name || !isForwardTimeRange(displayStart, displayEnd)) {
-    showGenericAlert("Invalid shift", "Shifts need a name and a start time earlier than the end time.");
+  if (!name || !isValidTimeRangeWithinDuration(displayStart, displayEnd, maxDurationMinutes)) {
+    showGenericAlert("Invalid shift", `Shifts need a name and a duration of ${maxDurationLabel} or less. Overnight shifts are allowed.`);
     return;
   }
 
   const date = getScheduleReferenceDate();
   const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
   const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
-  if (!isSameDayForwardEasternRange(convertedStart, convertedEnd)) {
-    showGenericAlert("Invalid shift", "Shift times must stay older-to-newer on the same Eastern day.");
+  if (!isValidTimeRangeWithinDuration(convertedStart.time, convertedEnd.time, maxDurationMinutes)) {
+    showGenericAlert("Invalid shift", `Shift times must be ${maxDurationLabel} or less in Eastern Time.`);
     return;
   }
 
   template.name = name;
   template.start = convertedStart.time;
   template.end = convertedEnd.time;
+  if (isRegionCoverageTemplate) {
+    const region = getRegionById(normalizedRegionId);
+    if (region) {
+      region.coverageStart = convertedStart.time;
+      region.coverageEnd = convertedEnd.time;
+      syncRegionCoverageShift(region.id);
+    }
+  }
   completeAdminSave("Shift saved.");
 }
 
-function removeShiftTemplate(shiftId) {
+function removeShiftTemplate(shiftId, regionId = selectedAdminRegionId) {
   if (!isAdminTabUnlocked("shifts")) {
     return;
   }
 
-  const template = data.shiftTemplates.find((item) => item.id === shiftId);
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  const template = getScopedShiftTemplates(normalizedRegionId).find((item) => item.id === shiftId);
   if (!template) {
     return;
   }
 
-  openRemoveShiftModal(template);
+  openRemoveShiftModal(template, normalizedRegionId);
 }
 
-function openRemoveShiftModal(template) {
+function openRemoveShiftModal(template, regionId = selectedAdminRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
   if (!elements.removeShiftModal) {
-    performRemoveShiftTemplate(template.id);
+    performRemoveShiftTemplate(template.id, normalizedRegionId);
     return;
   }
 
   pendingRemoveShiftId = template.id;
+  pendingRemoveShiftRegionId = normalizedRegionId;
   if (elements.removeShiftModalName) {
     const date = getScheduleReferenceDate();
     const abbreviation = getSelectedTimezoneAbbreviationForDate(date);
     elements.removeShiftModalName.textContent = `${template.name} · ${formatEasternTimeInputForDisplay(date, template.start)}–${formatEasternTimeInputForDisplay(date, template.end)} ${abbreviation}`;
   }
   if (elements.removeShiftModalImpact) {
-    elements.removeShiftModalImpact.textContent = getRemoveShiftImpactText(template);
+    elements.removeShiftModalImpact.textContent = getRemoveShiftImpactText(template, normalizedRegionId);
   }
 
   elements.removeShiftModal.classList.remove("hidden");
@@ -3388,6 +4650,7 @@ function openRemoveShiftModal(template) {
 
 function closeRemoveShiftModal() {
   pendingRemoveShiftId = null;
+  pendingRemoveShiftRegionId = GLOBAL_REGION_SCOPE_ID;
   if (!elements.removeShiftModal) {
     return;
   }
@@ -3403,23 +4666,32 @@ function confirmRemoveShift() {
   }
 
   const shiftId = pendingRemoveShiftId;
+  const regionId = pendingRemoveShiftRegionId;
   closeRemoveShiftModal();
-  performRemoveShiftTemplate(shiftId);
+  performRemoveShiftTemplate(shiftId, regionId);
 }
 
-function performRemoveShiftTemplate(shiftId) {
-  data.shiftTemplates = data.shiftTemplates.filter((item) => item.id !== shiftId);
-  data.users.forEach((user) => {
-    user.schedules.forEach((schedule) => {
-      if (schedule.shiftType === shiftId) {
-        schedule.shiftType = "custom";
-      }
+function performRemoveShiftTemplate(shiftId, regionId = selectedAdminRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  setScopedShiftTemplates(normalizedRegionId, getScopedShiftTemplates(normalizedRegionId).filter((item) => item.id !== shiftId));
+  if (!normalizedRegionId) {
+    data.users.forEach((user) => {
+      user.schedules.forEach((schedule) => {
+        if (schedule.shiftType === shiftId) {
+          schedule.shiftType = "custom";
+        }
+      });
     });
-  });
+  }
   completeAdminSave("Shift removed.");
 }
 
-function getRemoveShiftImpactText(template) {
+function getRemoveShiftImpactText(template, regionId = selectedAdminRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  if (normalizedRegionId) {
+    return "Regional shift presets can be removed without changing saved user schedules.";
+  }
+
   const affectedSchedules = data.users.reduce((count, user) => (
     count + user.schedules.filter((schedule) => schedule.shiftType === template.id).length
   ), 0);
@@ -3440,15 +4712,17 @@ function addUser(event) {
     return;
   }
 
+  const userId = makeId(name, data.users.map((user) => user.id));
   data.users.push({
-    id: makeId(name, data.users.map((user) => user.id)),
+    id: userId,
     name,
-    regionIds: [],
+    regionIds: selectedAdminRegionId ? [selectedAdminRegionId] : [],
     schedules: []
   });
+  addUserToRegionTeamOrder(selectedAdminRegionId, userId);
 
   elements.addUserForm.reset();
-  completeAdminSave("User saved.");
+  completeAdminSave(selectedAdminRegionId ? `User saved to ${getRegionScopeLabel(selectedAdminRegionId)}.` : "User saved.");
 }
 
 function addRegion(event) {
@@ -3462,13 +4736,113 @@ function addRegion(event) {
     return;
   }
 
+  const coverageStart = elements.regionCoverageStartInput?.value || "07:00";
+  const coverageEnd = elements.regionCoverageEndInput?.value || "19:00";
+  if (!isValidRegionCoverageTimeRange(coverageStart, coverageEnd)) {
+    showGenericAlert("Invalid region hours", "Region hours must be more than 0 minutes and no more than 14 hours. Overnight windows are allowed.");
+    return;
+  }
+
+  const id = makeId(name, data.regions.map((region) => region.id));
   data.regions.push({
-    id: makeId(name, data.regions.map((region) => region.id)),
-    name
+    id,
+    name,
+    coverageStart,
+    coverageEnd
   });
+  data.regionalSettings ||= {};
+  data.regionalSettings[id] = createDefaultRegionSettings(id);
 
   elements.addRegionForm.reset();
+  if (elements.regionCoverageStartInput) {
+    elements.regionCoverageStartInput.value = "07:00";
+  }
+  if (elements.regionCoverageEndInput) {
+    elements.regionCoverageEndInput.value = "19:00";
+  }
   completeAdminSave("Region saved.");
+}
+
+function updateRegionCoverage(regionId) {
+  if (!isAdminTabUnlocked("regions")) {
+    return;
+  }
+
+  const startInput = elements.regionsList?.querySelector(`[data-region-coverage-start="${cssEscape(regionId)}"]`);
+  const endInput = elements.regionsList?.querySelector(`[data-region-coverage-end="${cssEscape(regionId)}"]`);
+  saveRegionCoverage(regionId, startInput?.value || "", endInput?.value || "", "regions");
+}
+
+function updateShiftRegionCoverage(regionId) {
+  if (!isAdminTabUnlocked("shifts")) {
+    return;
+  }
+
+  const startInput = elements.shiftsList?.querySelector(`[data-shift-region-coverage-start="${cssEscape(regionId)}"]`);
+  const endInput = elements.shiftsList?.querySelector(`[data-shift-region-coverage-end="${cssEscape(regionId)}"]`);
+  const displayStart = startInput?.value || "";
+  const displayEnd = endInput?.value || "";
+  if (!isValidRegionCoverageTimeRange(displayStart, displayEnd)) {
+    showGenericAlert("Invalid region hours", "Region hours must be more than 0 minutes and no more than 14 hours. Overnight windows are allowed.");
+    return;
+  }
+
+  const date = getScheduleReferenceDate();
+  const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
+  const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
+  saveRegionCoverage(regionId, convertedStart.time, convertedEnd.time, "shifts");
+}
+
+function saveRegionCoverage(regionId, coverageStart, coverageEnd, tabName = "regions") {
+  const region = data.regions.find((item) => item.id === regionId);
+  if (!region) {
+    return;
+  }
+
+  if (!isValidRegionCoverageTimeRange(coverageStart, coverageEnd)) {
+    showGenericAlert("Invalid region hours", "Region hours must be more than 0 minutes and no more than 14 hours. Overnight windows are allowed.");
+    return;
+  }
+
+  region.coverageStart = coverageStart;
+  region.coverageEnd = coverageEnd;
+  syncRegionCoverageShift(region.id);
+  completeAdminSave("Region hours saved.", tabName);
+}
+
+function syncRegionCoverageShift(regionId, shiftTemplates = getScopedShiftTemplates(regionId)) {
+  const region = getRegionById(regionId);
+  if (!region) {
+    return;
+  }
+
+  const coverageWindow = getRegionCoverageWindow(region.id);
+  const shiftId = `${region.id}-coverage`;
+  const existingShift = shiftTemplates.find((template) => template.id === shiftId);
+  if (existingShift) {
+    existingShift.name = `${region.name} region hours`;
+    existingShift.start = coverageWindow.start;
+    existingShift.end = coverageWindow.end;
+    return;
+  }
+
+  shiftTemplates.unshift({
+    id: shiftId,
+    name: `${region.name} region hours`,
+    start: coverageWindow.start,
+    end: coverageWindow.end
+  });
+}
+
+function isRegionCoverageShiftTemplate(template, regionId = selectedAdminRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  return Boolean(normalizedRegionId && template?.id === `${normalizedRegionId}-coverage`);
+}
+
+function getShiftTemplateMaxDurationMinutes(template, regionId = selectedAdminRegionId) {
+  return isRegionCoverageShiftTemplate(template, regionId)
+    ? MAX_REGION_COVERAGE_MINUTES
+    : MAX_SCHEDULE_DURATION_MINUTES;
 }
 
 function toggleRegionsEnabled() {
@@ -3495,9 +4869,23 @@ function removeRegion(regionId) {
 
   showGenericConfirm("Remove region", `Remove ${region.name}?`, () => {
     data.regions = data.regions.filter((item) => item.id !== regionId);
-    data.users.forEach((user) => {
-      user.regionIds = (user.regionIds || []).filter((id) => id !== regionId);
+  data.users.forEach((user) => {
+    user.regionIds = (user.regionIds || []).filter((id) => id !== regionId);
+  });
+    data.systems.forEach((system) => {
+      system.regionIds = getSystemRegionIds(system).filter((id) => id !== regionId);
+      if (areRegionsEnabled() && data.regions.length > 0 && system.regionIds.length === 0) {
+        system.regionIds = [data.regions[0].id];
+      }
+      pruneSystemCoverageToRegions(system);
     });
+    delete data.regionalSettings?.[regionId];
+    if (selectedAssignmentRegionId === regionId) {
+      selectedAssignmentRegionId = GLOBAL_REGION_SCOPE_ID;
+    }
+    if (selectedAdminRegionId === regionId) {
+      selectedAdminRegionId = GLOBAL_REGION_SCOPE_ID;
+    }
     completeAdminSave("Region removed.");
   });
 }
@@ -3516,9 +4904,12 @@ function toggleUserRegion(userId, regionId, checked) {
   user.regionIds = Array.isArray(user.regionIds) ? user.regionIds : [];
   if (checked && !user.regionIds.includes(regionId)) {
     user.regionIds.push(regionId);
+    addUserToRegionTeamOrder(regionId, userId);
   }
   if (!checked) {
     user.regionIds = user.regionIds.filter((id) => id !== regionId);
+    removeUserFromRegionTeamOrder(regionId, userId);
+    data.systems.forEach(pruneSystemCoverageToRegions);
   }
 
   completeAdminSave("User regions saved.");
@@ -3584,8 +4975,15 @@ function performRemoveUser(userId) {
   }
 
   data.users = data.users.filter((item) => item.id !== userId);
+  removeUserFromAllRegionTeamOrders(userId);
   data.exceptions = data.exceptions.filter((slot) => slot.userId !== userId);
   data.holidays = data.holidays.filter((holiday) => holiday.userId !== userId);
+  Object.values(data.regionalSettings || {}).forEach((settings) => {
+    settings.holidays = (settings.holidays || []).filter((holiday) => holiday.userId !== userId);
+    (settings.systems || []).forEach((system) => {
+      system.primaryUserIds = system.primaryUserIds.filter((id) => id !== userId);
+    });
+  });
   data.delegations.forEach((delegation) => {
     if (delegation.delegatorUserId === userId) {
       delegation.delegatorUserId = "";
@@ -3593,7 +4991,7 @@ function performRemoveUser(userId) {
   });
   data.systems.forEach((system) => {
     system.primaryUserIds = system.primaryUserIds.filter((id) => id !== userId);
-    clampQueue(system.id);
+    clampQueue(system.id, GLOBAL_REGION_SCOPE_ID);
   });
   clearSelectedAssignee();
   completeAdminSave("User removed.");
@@ -3602,8 +5000,11 @@ function performRemoveUser(userId) {
 function getRemoveUserImpactText(user) {
   const scheduleCount = user.schedules.length;
   const slotCount = data.exceptions.filter((slot) => slot.userId === user.id).length;
-  const holidayCount = data.holidays.filter((holiday) => holiday.userId === user.id).length;
-  const coverageCount = data.systems.filter((system) => system.primaryUserIds.includes(user.id)).length;
+  const regionalSettings = Object.values(data.regionalSettings || {});
+  const holidayCount = data.holidays.filter((holiday) => holiday.userId === user.id).length
+    + regionalSettings.reduce((count, settings) => count + (settings.holidays || []).filter((holiday) => holiday.userId === user.id).length, 0);
+  const coverageCount = data.systems.filter((system) => system.primaryUserIds.includes(user.id)).length
+    + regionalSettings.reduce((count, settings) => count + (settings.systems || []).filter((system) => system.primaryUserIds.includes(user.id)).length, 0);
   const impact = [
     `${scheduleCount} schedule${scheduleCount === 1 ? "" : "s"}`,
     `${slotCount} break/extra slot${slotCount === 1 ? "" : "s"}`,
@@ -3614,8 +5015,24 @@ function getRemoveUserImpactText(user) {
   return `This will remove ${impact}. Existing ticket history remains visible.`;
 }
 
-function moveTeamUser(userId, direction) {
+function moveTeamUser(userId, direction, regionId = selectedAdminRegionId) {
   if (!isAdminTabUnlocked("users")) {
+    return;
+  }
+
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  if (normalizedRegionId) {
+    const regionUsers = getRankedUsersForRegionScope(normalizedRegionId);
+    const currentIndex = regionUsers.findIndex((user) => user.id === userId);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= regionUsers.length) {
+      return;
+    }
+
+    const orderIds = regionUsers.map((user) => user.id);
+    [orderIds[currentIndex], orderIds[nextIndex]] = [orderIds[nextIndex], orderIds[currentIndex]];
+    setRegionTeamOrderIds(normalizedRegionId, orderIds);
+    completeAdminSave(`${getRegionScopeLabel(normalizedRegionId)} team ranking updated.`);
     return;
   }
 
@@ -3675,28 +5092,30 @@ function addSchedule(event) {
 
   const displayStart = elements.scheduleStartInput.value;
   const displayEnd = elements.scheduleEndInput.value;
-  if (!isForwardTimeRange(displayStart, displayEnd)) {
-    showGenericAlert("Invalid time", "Schedule start time must be earlier than end time.");
+  if (!isValidScheduleTimeRange(displayStart, displayEnd)) {
+    showGenericAlert("Invalid time", "Schedule duration must be 12 hours or less. Overnight schedules are allowed.");
     return;
   }
 
   const date = getScheduleReferenceDate();
   const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
   const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
-  if (!isSameDayForwardEasternRange(convertedStart, convertedEnd)) {
-    showGenericAlert("Invalid time", "Schedule times must stay older-to-newer on the same Eastern day.");
+  if (!isValidScheduleTimeRange(convertedStart.time, convertedEnd.time)) {
+    showGenericAlert("Invalid time", "Schedule duration must be 12 hours or less in Eastern Time.");
     return;
   }
 
   const start = convertedStart.time;
   const end = convertedEnd.time;
+  const startDayOffset = getDateOffset(date, convertedStart.date);
+  const endDayOffset = getDateOffset(date, convertedEnd.date);
   const dateRange = getScheduleDateRangeFromForm();
   if (!dateRange) {
     return;
   }
 
   if (editingSchedule) {
-    updateSchedule(user, days, start, end, dateRange);
+    updateSchedule(user, days, start, end, dateRange, { startDayOffset, endDayOffset });
     return;
   }
 
@@ -3713,13 +5132,15 @@ function addSchedule(event) {
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
     start,
-    end
+    end,
+    startDayOffset,
+    endDayOffset
   });
 
   completeAdminSave("Schedule saved.");
 }
 
-function updateSchedule(user, days, start, end, dateRange) {
+function updateSchedule(user, days, start, end, dateRange, dayOffsets = {}) {
   const originalUser = data.users.find((item) => item.id === editingSchedule.userId);
   const schedule = originalUser?.schedules.find((item) => item.id === editingSchedule.scheduleId);
   if (!schedule) {
@@ -3743,7 +5164,9 @@ function updateSchedule(user, days, start, end, dateRange) {
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
     start,
-    end
+    end,
+    startDayOffset: dayOffsets.startDayOffset ?? getScheduleStartDayOffset(schedule, originalUser),
+    endDayOffset: dayOffsets.endDayOffset ?? getScheduleEndDayOffset(schedule, originalUser)
   };
 
   if (user.id === originalUser.id) {
@@ -3897,8 +5320,10 @@ function clearScheduleEditIfNeeded(scheduleId) {
 
 function formatRemoveScheduleName(user, schedule, date) {
   const abbreviation = getSelectedTimezoneAbbreviationForDate(date);
-  const start = formatEasternTimeInputForDisplay(date, schedule.start);
-  const end = formatEasternTimeInputForDisplay(date, schedule.end);
+  const startDate = getScheduleEndpointDate(date, schedule, "start", user);
+  const endDate = getScheduleEndpointDate(date, schedule, "end", user);
+  const start = formatEasternTimeInputForDisplay(startDate, schedule.start);
+  const end = formatEasternTimeInputForDisplay(endDate, schedule.end);
   const days = getScheduleDaySummary(schedule);
   return `${user.name} · ${getScheduleDateRangeSummary(schedule)} · ${days} · ${start}–${end} ${abbreviation}`;
 }
@@ -3927,7 +5352,7 @@ function addTimelineSlot(event) {
   event.preventDefault();
   const user = data.users.find((item) => item.id === elements.timelineUserSelect.value);
   if (!user) {
-    showGenericAlert("Missing user", "Add a user before adding a timeline slot.");
+    showGenericAlert("Missing user", "Add a user before adding a change.");
     return;
   }
 
@@ -3966,24 +5391,24 @@ function addTimelineSlot(event) {
     reason
   });
 
+  if (elements.timelineDateInput) {
+    elements.timelineDateInput.value = elements.slotDateInput.value;
+  }
   elements.slotReasonInput.value = "";
-  completeAdminSave("Timeline slot saved.");
+  completeAdminSave("Change saved.");
 }
 
 function inferTimelineSlotType(user, date, start, end) {
   const day = getDayNameFromDate(date);
-  const overlapsSchedule = user.schedules.some((schedule) => (
-    isScheduleActiveOnDate(schedule, date, day)
-      && isValidTimeRange(schedule.start, schedule.end)
-      && graphBlocksOverlap({ start, end }, schedule)
-  ));
+  const overlapsSchedule = getScheduleWindowsForDate(user, date, day)
+    .some((window) => graphBlocksOverlap({ start, end }, window));
 
   return overlapsSchedule ? "break" : "extra";
 }
 
 function removeTimelineSlot(slotId) {
   data.exceptions = data.exceptions.filter((slot) => slot.id !== slotId);
-  completeAdminSave("Timeline slot removed.");
+  completeAdminSave("Change removed.");
 }
 
 function startTimelineDraft(event) {
@@ -4004,8 +5429,7 @@ function startTimelineDraft(event) {
     && existingDraft;
 
   if (canMoveDraft) {
-    const draftStart = toMinutes(existingDraft.start);
-    const draftEnd = toMinutes(existingDraft.end);
+    const draftRange = getGraphBlockRange(existingDraft);
     timelineDrag = {
       mode: "move",
       draftId: existingDraft.id,
@@ -4013,8 +5437,8 @@ function startTimelineDraft(event) {
       lane,
       userId: lane.dataset.userId,
       date: lane.dataset.date,
-      durationMinutes: Math.max(draftEnd - draftStart, SLOT_MINUTES),
-      pointerOffsetMinutes: pointerMinutes - draftStart
+      durationMinutes: Math.max(draftRange ? draftRange.end - draftRange.start : SLOT_MINUTES, SLOT_MINUTES),
+      pointerOffsetMinutes: pointerMinutes - (draftRange?.start ?? pointerMinutes)
     };
     lane.classList.add("moving-draft");
     renderLiveDraftOverlay(lane);
@@ -4058,12 +5482,14 @@ function updateTimelineDraftFromDrag(currentMinutes) {
   const range = timelineDrag.mode === "move"
     ? normalizeMovedTimelineDraftRange(currentMinutes, timelineDrag.pointerOffsetMinutes, timelineDrag.durationMinutes)
     : normalizeTimelineDraftRange(timelineDrag.anchorMinutes, currentMinutes);
+  const sourceDate = getGraphDateForMinutes(timelineDrag.date, range.start);
   upsertTimelineDraft({
     id: timelineDrag.draftId,
     userId: timelineDrag.userId,
     date: timelineDrag.date,
-    start: minutesToTime(range.start),
-    end: minutesToTime(range.end)
+    sourceDate,
+    start: graphMinutesToTime(range.start),
+    end: graphMinutesToTime(range.end)
   });
 
   renderTimelineDraftActions();
@@ -4111,26 +5537,29 @@ function upsertTimelineDraft(draft) {
 }
 
 function normalizeTimelineDraftRange(anchorMinutes, currentMinutes) {
+  const graphRange = getScheduleGraphTimeRange();
   const first = Math.min(anchorMinutes, currentMinutes);
   const last = Math.max(anchorMinutes, currentMinutes);
-  const start = Math.min(Math.max(first, TIMELINE_START_MINUTES), TIMELINE_END_MINUTES - SLOT_MINUTES);
-  const end = Math.min(Math.max(last, start + SLOT_MINUTES), TIMELINE_END_MINUTES);
+  const start = Math.min(Math.max(first, graphRange.start), graphRange.end - SLOT_MINUTES);
+  const end = Math.min(Math.max(last, start + SLOT_MINUTES), graphRange.end);
   return { start, end };
 }
 
 function normalizeMovedTimelineDraftRange(currentMinutes, pointerOffsetMinutes, durationMinutes) {
-  const duration = Math.max(durationMinutes, SLOT_MINUTES);
-  const maxStart = TIMELINE_END_MINUTES - duration;
+  const graphRange = getScheduleGraphTimeRange();
+  const duration = Math.min(Math.max(durationMinutes, SLOT_MINUTES), graphRange.duration);
+  const maxStart = graphRange.end - duration;
   const rawStart = currentMinutes - pointerOffsetMinutes;
-  const start = Math.min(Math.max(roundToNearestSlot(rawStart), TIMELINE_START_MINUTES), maxStart);
+  const start = Math.min(Math.max(roundToNearestSlot(rawStart), graphRange.start), maxStart);
   return { start, end: start + duration };
 }
 
 function getTimelineMinutesFromPointer(lane, clientX) {
+  const graphRange = getScheduleGraphTimeRange();
   const rect = lane.getBoundingClientRect();
   const ratio = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
-  const rawMinutes = TIMELINE_START_MINUTES + ratio * (TIMELINE_END_MINUTES - TIMELINE_START_MINUTES);
-  return Math.min(Math.max(roundToNearestSlot(rawMinutes), TIMELINE_START_MINUTES), TIMELINE_END_MINUTES);
+  const rawMinutes = graphRange.start + ratio * graphRange.duration;
+  return Math.min(Math.max(roundToNearestSlot(rawMinutes), graphRange.start), graphRange.end);
 }
 
 function renderTimelineDraftActions() {
@@ -4186,12 +5615,13 @@ function saveTimelineDraftSchedule() {
       return;
     }
 
+    const sourceDate = draft.sourceDate || draft.date;
     user.schedules.push({
       id: makeRecordId("schedule"),
       shiftType: "custom",
-      days: [getDayNameFromDate(draft.date)],
-      startDate: draft.date,
-      endDate: draft.date,
+      days: [getDayNameFromDate(sourceDate)],
+      startDate: sourceDate,
+      endDate: sourceDate,
       start: draft.start,
       end: draft.end
     });
@@ -4209,10 +5639,14 @@ function clearTimelineDraft() {
 
 function formatTimelineDraftSummary(draft) {
   const user = data.users.find((item) => item.id === draft.userId);
-  const abbreviation = getSelectedTimezoneAbbreviationForDate(draft.date);
-  const start = formatEasternTimeInputForDisplay(draft.date, draft.start);
-  const end = formatEasternTimeInputForDisplay(draft.date, draft.end);
-  return `${user?.name || "Removed user"} · ${getDayNameFromDate(draft.date).slice(0, 3)} · ${start}–${end} ${abbreviation}`;
+  const sourceDate = draft.sourceDate || draft.date;
+  const abbreviation = getSelectedTimezoneAbbreviationForDate(sourceDate);
+  const start = formatEasternTimeInputForDisplay(sourceDate, draft.start);
+  const endDate = toMinutes(draft.end) <= toMinutes(draft.start)
+    ? formatDate(addDays(parseDate(sourceDate), 1))
+    : sourceDate;
+  const end = formatEasternTimeInputForDisplay(endDate, draft.end);
+  return `${user?.name || "Removed user"} · ${getDayNameFromDate(sourceDate).slice(0, 3)} · ${start}–${end} ${abbreviation}`;
 }
 
 function getScheduleDayConflicts(user, days, dateRange, ignoredScheduleId = null) {
@@ -4248,8 +5682,9 @@ function getTimelineDraftScheduleConflict() {
       continue;
     }
 
-    const day = getDayNameFromDate(draft.date);
-    const draftDateRange = { startDate: draft.date, endDate: draft.date };
+    const sourceDate = draft.sourceDate || draft.date;
+    const day = getDayNameFromDate(sourceDate);
+    const draftDateRange = { startDate: sourceDate, endDate: sourceDate };
     const existingConflicts = getScheduleDayConflicts(user, [day], draftDateRange);
     if (existingConflicts.length > 0) {
       return { user, conflictDays: existingConflicts };
@@ -4260,7 +5695,7 @@ function getTimelineDraftScheduleConflict() {
     }
 
     const proposedDays = proposedDaysByUser.get(user.id) || new Set();
-    const proposedKey = `${draft.date}:${day}`;
+    const proposedKey = `${sourceDate}:${day}`;
     if (proposedDays.has(proposedKey)) {
       return { user, conflictDays: [day] };
     }
@@ -4298,7 +5733,9 @@ function prefillSlotFromTimeline(event) {
       return;
     }
 
-    const template = getShiftTemplate(elements.shiftTemplateSelect?.value) || getShiftTemplate("regular") || data.shiftTemplates[0];
+    const template = getShiftTemplate(elements.shiftTemplateSelect?.value)
+      || getDefaultQuickShiftTemplateForUser(weekCell.dataset.userId)
+      || getShiftTemplate("regular");
     prefillScheduleForm(weekCell.dataset.userId, weekCell.dataset.date, template?.start || "09:00", template?.end || "17:00", false);
     return;
   }
@@ -4313,6 +5750,7 @@ function editScheduleFromGraph(userId, scheduleId, date) {
 
   prefillScheduleForm(userId, date, schedule.start, schedule.end, false, {
     scheduleId,
+    schedule,
     days: schedule.days,
     shiftType: schedule.shiftType,
     startDate: isValidDateInput(schedule.startDate || "") ? schedule.startDate : getWeekDates(date)[0],
@@ -4321,8 +5759,11 @@ function editScheduleFromGraph(userId, scheduleId, date) {
 }
 
 function prefillScheduleForm(userId, date, start, end, forceCustom, options = {}) {
-  const displayStart = formatEasternTimeInputForDisplay(date, start);
-  const displayEnd = formatEasternTimeInputForDisplay(date, end);
+  const user = data.users.find((item) => item.id === userId);
+  const displayStartDate = options.schedule ? getScheduleEndpointDate(date, options.schedule, "start", user) : date;
+  const displayEndDate = options.schedule ? getScheduleEndpointDate(date, options.schedule, "end", user) : date;
+  const displayStart = formatEasternTimeInputForDisplay(displayStartDate, start);
+  const displayEnd = formatEasternTimeInputForDisplay(displayEndDate, end);
   editingSchedule = options.scheduleId ? { userId, scheduleId: options.scheduleId } : null;
   const weekDates = getWeekDates(date);
   const startDate = options.startDate ? getBusinessWeekRange(options.startDate).startDate : weekDates[0];
@@ -4337,10 +5778,14 @@ function prefillScheduleForm(userId, date, start, end, forceCustom, options = {}
   }
 
   if (elements.shiftTemplateSelect) {
-    const optionValues = [...elements.shiftTemplateSelect.options].map((option) => option.value);
-    if (options.shiftType && optionValues.includes(options.shiftType)) {
-      elements.shiftTemplateSelect.value = options.shiftType;
+    const quickShiftOptions = getCurrentQuickShiftOptionsFromSelect();
+    const optionValues = quickShiftOptions.map((quickShiftOption) => quickShiftOption.value);
+    const preferredValue = getPreferredQuickShiftValue(options.shiftType || "", userId, quickShiftOptions);
+    if (optionValues.includes(preferredValue)) {
+      elements.shiftTemplateSelect.value = preferredValue;
     } else if (forceCustom) {
+      elements.shiftTemplateSelect.value = "custom";
+    } else {
       elements.shiftTemplateSelect.value = "custom";
     }
   }
@@ -4860,8 +6305,15 @@ function addSystem(event) {
   }
 
   const id = makeId(name, data.systems.map((system) => system.id));
-  data.systems.push({ id, name, primaryUserIds: [], serviceNowConfigItem: "" });
-  data.queues[id] = 0;
+  const system = {
+    id,
+    name,
+    regionIds: getDefaultSystemRegionIds(selectedAdminRegionId),
+    primaryUserIds: [],
+    serviceNowConfigItem: ""
+  };
+  data.systems.push(system);
+  ensureSystemQueues(system);
   elements.addSystemForm.reset();
   completeAdminSave("System saved.");
 }
@@ -4890,12 +6342,60 @@ function removeSystem(systemId) {
     return;
   }
 
-  showGenericConfirm("Remove system", `Remove ${system.name}?`, () => {
-    data.systems = data.systems.filter((item) => item.id !== systemId);
-    delete data.queues[systemId];
+  const title = selectedAdminRegionId ? "Remove system from region" : "Remove system";
+  const message = selectedAdminRegionId
+    ? `Remove ${system.name} from ${getRegionScopeLabel(selectedAdminRegionId)}? Other selected regions stay attached.`
+    : `Remove ${system.name}?`;
+  showGenericConfirm(title, message, () => {
+    if (selectedAdminRegionId) {
+      removeSystemFromRegion(system, selectedAdminRegionId);
+      if (getSystemRegionIds(system).length === 0) {
+        data.systems = data.systems.filter((item) => item.id !== systemId);
+      }
+    } else {
+      data.systems = data.systems.filter((item) => item.id !== systemId);
+      data.regions.forEach((region) => {
+        delete getScopedQueues(region.id)[systemId];
+      });
+      delete data.queues[systemId];
+    }
     clearSelectedAssignee();
     completeAdminSave("System removed.");
   });
+}
+
+function toggleSystemRegion(systemId, regionId, checked) {
+  if (!isAdminTabUnlocked("systems")) {
+    return;
+  }
+
+  const system = data.systems.find((item) => item.id === systemId);
+  const region = data.regions.find((item) => item.id === regionId);
+  if (!system || !region || !areRegionsEnabled()) {
+    renderSystems();
+    return;
+  }
+
+  const regionIds = getSystemRegionIds(system);
+  if (checked && !regionIds.includes(regionId)) {
+    system.regionIds = regionIds.concat(regionId);
+    getScopedQueues(regionId)[system.id] ??= 0;
+  }
+
+  if (!checked) {
+    if (regionIds.length <= 1) {
+      showGenericAlert("Region required", "Each system must have at least one region selected.");
+      renderSystems();
+      return;
+    }
+    system.regionIds = regionIds.filter((id) => id !== regionId);
+    delete getScopedQueues(regionId)[system.id];
+  }
+
+  pruneSystemCoverageToRegions(system);
+  getSystemRegionIds(system).forEach((id) => clampQueue(system.id, id));
+  clearSelectedAssignee();
+  completeAdminSave("System regions saved.", "systems");
 }
 
 function toggleCoverage(systemId, userId, checked) {
@@ -4907,6 +6407,12 @@ function toggleCoverage(systemId, userId, checked) {
   if (!system) {
     return;
   }
+  const user = data.users.find((item) => item.id === userId);
+  if (checked && (!user || !userBelongsToAnyRegion(user, getSystemRegionIds(system)))) {
+    showGenericAlert("User outside system regions", "Pick users from the selected system regions.");
+    renderSystems();
+    return;
+  }
 
   if (checked && !system.primaryUserIds.includes(userId)) {
     system.primaryUserIds.push(userId);
@@ -4916,7 +6422,7 @@ function toggleCoverage(systemId, userId, checked) {
     system.primaryUserIds = system.primaryUserIds.filter((id) => id !== userId);
   }
 
-  clampQueue(systemId);
+  getSystemRegionIds(system).forEach((regionId) => clampQueue(systemId, regionId));
   clearSelectedAssignee();
   completeAdminSave("Coverage mapping saved.");
 }
@@ -4938,7 +6444,7 @@ function moveCoveredUser(systemId, userId, direction) {
   }
 
   [system.primaryUserIds[currentIndex], system.primaryUserIds[nextIndex]] = [system.primaryUserIds[nextIndex], system.primaryUserIds[currentIndex]];
-  clampQueue(systemId);
+  getSystemRegionIds(system).forEach((regionId) => clampQueue(systemId, regionId));
   clearSelectedAssignee();
   completeAdminSave("System priority saved.");
 }
@@ -4954,7 +6460,7 @@ function removeCoveredUser(systemId, userId) {
   }
 
   system.primaryUserIds = system.primaryUserIds.filter((id) => id !== userId);
-  clampQueue(systemId);
+  getSystemRegionIds(system).forEach((regionId) => clampQueue(systemId, regionId));
   if (selectedAssigneeId === userId) {
     clearSelectedAssignee();
   }
@@ -4975,44 +6481,53 @@ function addHoliday(event) {
     return;
   }
 
-  data.holidays.push({
+  const holidayTarget = getHolidayTargetFromSelectValue(elements.holidayUserSelect.value);
+  if (!holidayTarget) {
+    showGenericAlert("Missing user", "Choose a specific user, or pick a region before adding a holiday for all users.");
+    return;
+  }
+
+  const holiday = {
     id: makeRecordId("holiday"),
-    userId: elements.holidayUserSelect.value,
+    userId: holidayTarget.userId,
     date: elements.holidayDateInput.value,
     name: elements.holidayNameInput.value.trim() || "Holiday"
-  });
+  };
+  getHolidayTargetList(holidayTarget).push(holiday);
 
   elements.holidayNameInput.value = "";
   completeAdminSave("Holiday saved.");
 }
 
-function removeHoliday(holidayId) {
+function removeHoliday(holidayId, regionId = selectedAdminRegionId) {
   if (!isAdminTabUnlocked("holidays")) {
     return;
   }
 
-  const holiday = data.holidays.find((item) => item.id === holidayId);
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  const holiday = getScopedHolidays(normalizedRegionId).find((item) => item.id === holidayId);
   if (!holiday) {
     return;
   }
 
-  openRemoveHolidayModal(holiday);
+  openRemoveHolidayModal(holiday, normalizedRegionId);
 }
 
-function openRemoveHolidayModal(holiday) {
+function openRemoveHolidayModal(holiday, regionId = selectedAdminRegionId) {
   if (!elements.removeHolidayModal) {
-    performRemoveHoliday(holiday.id);
+    performRemoveHoliday(holiday.id, regionId);
     return;
   }
 
   pendingRemoveHolidayId = holiday.id;
+  pendingRemoveHolidayRegionId = normalizeRegionScopeId(regionId);
   if (elements.removeHolidayModalName) {
     elements.removeHolidayModalName.textContent = `${holiday.name || "Holiday"} · ${formatHolidayDate(holiday.date)}`;
   }
   if (elements.removeHolidayModalImpact) {
-    const userName = getHolidayUserName(holiday);
+    const userName = getHolidayUserName(holiday, regionId);
     const scopeText = holiday.userId === GLOBAL_HOLIDAY_USER_ID
-      ? "all users"
+      ? userName.toLowerCase()
       : userName;
     elements.removeHolidayModalImpact.textContent = `This removes the holiday for ${scopeText}. Queue availability will update immediately.`;
   }
@@ -5024,6 +6539,7 @@ function openRemoveHolidayModal(holiday) {
 
 function closeRemoveHolidayModal() {
   pendingRemoveHolidayId = null;
+  pendingRemoveHolidayRegionId = GLOBAL_REGION_SCOPE_ID;
   if (!elements.removeHolidayModal) {
     return;
   }
@@ -5039,19 +6555,58 @@ function confirmRemoveHoliday() {
   }
 
   const holidayId = pendingRemoveHolidayId;
+  const regionId = pendingRemoveHolidayRegionId;
   closeRemoveHolidayModal();
-  performRemoveHoliday(holidayId);
+  performRemoveHoliday(holidayId, regionId);
 }
 
-function performRemoveHoliday(holidayId) {
-  data.holidays = data.holidays.filter((holiday) => holiday.id !== holidayId);
+function performRemoveHoliday(holidayId, regionId = selectedAdminRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  setScopedHolidays(normalizedRegionId, getScopedHolidays(normalizedRegionId).filter((holiday) => holiday.id !== holidayId));
   completeAdminSave("Holiday removed.");
 }
 
-function getHolidayUserName(holiday) {
-  return holiday.userId === GLOBAL_HOLIDAY_USER_ID
-    ? "All users"
-    : data.users.find((user) => user.id === holiday.userId)?.name || "Removed user";
+function getHolidayTargetFromSelectValue(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value.startsWith(REGION_HOLIDAY_USER_PREFIX)) {
+    const regionId = normalizeRegionScopeId(value.slice(REGION_HOLIDAY_USER_PREFIX.length));
+    return regionId
+      ? { userId: GLOBAL_HOLIDAY_USER_ID, regionId }
+      : null;
+  }
+
+  if (value === GLOBAL_HOLIDAY_USER_ID) {
+    if (areRegionsEnabled() && !selectedAdminRegionId) {
+      return null;
+    }
+
+    return { userId: GLOBAL_HOLIDAY_USER_ID, regionId: selectedAdminRegionId };
+  }
+
+  return data.users.some((user) => user.id === value)
+    ? { userId: value, regionId: GLOBAL_REGION_SCOPE_ID }
+    : null;
+}
+
+function getHolidayTargetList(target) {
+  if (target.userId === GLOBAL_HOLIDAY_USER_ID || !areRegionsEnabled()) {
+    return getScopedHolidays(target.regionId);
+  }
+
+  return data.holidays;
+}
+
+function getHolidayUserName(holiday, regionId = selectedAdminRegionId) {
+  if (holiday.userId === GLOBAL_HOLIDAY_USER_ID) {
+    return normalizeRegionScopeId(regionId)
+      ? `All users in ${getRegionScopeLabel(regionId)}`
+      : "All users";
+  }
+
+  return data.users.find((user) => user.id === holiday.userId)?.name || "Removed user";
 }
 
 function formatHolidayDate(date) {
@@ -5060,7 +6615,7 @@ function formatHolidayDate(date) {
 
 function markSelectedAssigned(options = {}) {
   const easternNow = getEasternNow();
-  const queueState = getQueueState(getAssignmentQueueSystemId(), easternNow);
+  const queueState = getQueueState(getAssignmentQueueSystemId(), easternNow, selectedAssignmentRegionId);
   const selectedRow = queueState.rows.find((row) => row.user.id === selectedAssigneeId);
   if (!queueState.system || !selectedRow || !selectedRow.selectable) {
     return;
@@ -5086,40 +6641,30 @@ function markSelectedAssigned(options = {}) {
       : minutesToTime(assignmentRow.availabilityStart),
     systemId: queueState.system.id,
     systemName: queueState.system.name,
+    regionId: queueState.regionId,
+    regionName: getRegionScopeLabel(queueState.regionId),
     serviceNowConfigItem: String(queueState.system.serviceNowConfigItem || "").trim(),
     userId: assignmentRow.user.id,
     userName: assignmentRow.user.name
   };
   data.assignmentLog.push(assignmentRecord);
   lastAssignmentId = assignmentRecord.id;
-  const incidentRedirectUrl = shouldRedirectAfterAssignment()
-    ? buildIncidentHandoffUrl(assignmentRecord)
-    : "";
   const shouldCollectServiceNowDetails = shouldCollectServiceNowIncidentDetails();
 
   const originalIndex = queueState.system.primaryUserIds.indexOf(assignmentRow.user.id);
   if (!selectedRow.isOther && originalIndex >= 0) {
-    data.queues[queueState.system.id] = (originalIndex + 1) % queueState.system.primaryUserIds.length;
+    getScopedQueues(queueState.regionId)[queueState.system.id] = (originalIndex + 1) % queueState.system.primaryUserIds.length;
   }
 
   clearSelectedAssignee();
   completeDataSave("Ticket assigned.", {
     showToast: false,
     onSaved: () => {
-      if (incidentRedirectUrl) {
-        window.location.assign(incidentRedirectUrl);
-        return;
-      }
       if (shouldCollectServiceNowDetails) {
         openServiceNowIncidentModal(assignmentRecord.id);
       }
     }
   });
-}
-
-function shouldRedirectAfterAssignment() {
-  const config = getIncidentConfig();
-  return config.enabled && config.mode === "redirect";
 }
 
 function shouldCollectServiceNowIncidentDetails() {
@@ -5144,53 +6689,54 @@ function showLongWaitAssignmentSpeedBump(row, onConfirm) {
   });
 }
 
-function getQueueState(systemId, easternNow) {
-  const system = getAssignmentSystemById(systemId);
+function getQueueState(systemId, easternNow, regionId = selectedAssignmentRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  const system = getAssignmentSystemById(systemId, normalizedRegionId);
   if (!system) {
     return { system: null, rows: [], otherRows: [], recommendedRow: null, effectiveNow: easternNow };
   }
 
-  const effectiveNow = getEffectiveQueueNow(easternNow);
+  const effectiveNow = getEffectiveQueueNow(easternNow, normalizedRegionId);
   const isShiftQueue = system.id === SHIFT_QUEUE_SYSTEM_ID;
-  const allRows = getQueueUserRowsForSystem(system, easternNow, effectiveNow, isShiftQueue);
-  const otherRows = isShiftQueue ? [] : getGlobalRosterRows(easternNow, effectiveNow, system.primaryUserIds);
+  const allRows = getQueueUserRowsForSystem(system, easternNow, effectiveNow, isShiftQueue, normalizedRegionId);
+  const otherRows = isShiftQueue ? [] : getGlobalRosterRows(easternNow, effectiveNow, system.primaryUserIds, normalizedRegionId);
   const rows = isShiftQueue
     ? allRows
     : allRows.filter((row) => row.isCoverageMember).concat(getOtherQueueRow(otherRows, effectiveNow, selectedOtherAssigneeId));
 
   const recommendedRow = rows.find((row) => row.selectable) || null;
 
-  return { system, rows, otherRows, recommendedRow, effectiveNow };
+  return { system, rows, otherRows, recommendedRow, effectiveNow, regionId: normalizedRegionId };
 }
 
-function getQueueUserRowsForSystem(system, easternNow, effectiveNow, isShiftQueue = false) {
-  return data.users.map((user) => {
+function getQueueUserRowsForSystem(system, easternNow, effectiveNow, isShiftQueue = false, regionId = selectedAssignmentRegionId) {
+  return getRankedUsersForRegionScope(regionId).map((user) => {
     const systemPriority = isShiftQueue ? -1 : system.primaryUserIds.indexOf(user.id);
     const isCoverageMember = isShiftQueue || systemPriority >= 0;
-    const queuePriority = isShiftQueue ? Number.POSITIVE_INFINITY : getRotatedQueuePriority(system, systemPriority);
-    return buildQueueUserRow(user, easternNow, effectiveNow, systemPriority, queuePriority, isCoverageMember);
+    const queuePriority = isShiftQueue ? Number.POSITIVE_INFINITY : getRotatedQueuePriority(system, systemPriority, regionId);
+    return buildQueueUserRow(user, easternNow, effectiveNow, systemPriority, queuePriority, isCoverageMember, regionId);
   }).sort(compareQueueRows);
 }
 
-function getGlobalRosterRows(easternNow, effectiveNow, excludedUserIds = []) {
+function getGlobalRosterRows(easternNow, effectiveNow, excludedUserIds = [], regionId = selectedAssignmentRegionId) {
   const excludedIds = new Set(excludedUserIds);
-  return data.users
+  return getRankedUsersForRegionScope(regionId)
     .filter((user) => !excludedIds.has(user.id))
     .map((user) => (
-      buildQueueUserRow(user, easternNow, effectiveNow, -1, Number.POSITIVE_INFINITY, true)
+      buildQueueUserRow(user, easternNow, effectiveNow, -1, Number.POSITIVE_INFINITY, true, regionId)
     ))
     .sort(compareOtherRosterRows);
 }
 
-function buildQueueUserRow(user, easternNow, effectiveNow, systemPriority, queuePriority, isCoverageMember) {
-  const status = getEffectiveQueueUserStatus(user, easternNow, effectiveNow);
+function buildQueueUserRow(user, easternNow, effectiveNow, systemPriority, queuePriority, isCoverageMember, regionId = selectedAssignmentRegionId) {
+  const status = getEffectiveQueueUserStatus(user, easternNow, effectiveNow, regionId);
   const waitMinutes = getAvailabilityWaitMinutes(easternNow, effectiveNow, status);
-  const metrics = getAssignmentMetrics(user, systemPriority, queuePriority, effectiveNow, status, waitMinutes);
+  const metrics = getAssignmentMetrics(user, systemPriority, queuePriority, effectiveNow, status, waitMinutes, regionId);
   return { user, isCoverageMember, effectiveDate: effectiveNow.date, effectiveDay: effectiveNow.day, ...status, ...metrics };
 }
 
-function getEffectiveQueueUserStatus(user, easternNow, effectiveNow) {
-  const status = getUserStatus(user, effectiveNow);
+function getEffectiveQueueUserStatus(user, easternNow, effectiveNow, regionId = selectedAssignmentRegionId) {
+  const status = getUserStatus(user, effectiveNow, regionId);
   if (status.status !== "available" || !isFutureQueueTime(easternNow, effectiveNow)) {
     return status;
   }
@@ -5236,28 +6782,28 @@ function getOtherQueueRow(otherRows, effectiveNow, selectedOtherUserId = null) {
   };
 }
 
-function getAssignmentSystemById(systemId) {
+function getAssignmentSystemById(systemId, regionId = selectedAssignmentRegionId) {
   if (systemId === SHIFT_QUEUE_SYSTEM_ID) {
     return { id: SHIFT_QUEUE_SYSTEM_ID, name: SHIFT_QUEUE_SYSTEM_NAME, primaryUserIds: [] };
   }
 
-  return data.systems.find((item) => item.id === systemId) || null;
+  return getScopedSystems(regionId).find((item) => item.id === systemId) || null;
 }
 
-function getRotatedQueuePriority(system, systemPriority) {
+function getRotatedQueuePriority(system, systemPriority, regionId = selectedAssignmentRegionId) {
   if (!system.primaryUserIds.length || systemPriority < 0) {
     return Number.POSITIVE_INFINITY;
   }
 
-  const queueIndex = getQueueIndex(system);
+  const queueIndex = getQueueIndex(system, regionId);
   return (systemPriority - queueIndex + system.primaryUserIds.length) % system.primaryUserIds.length;
 }
 
-function getAssignmentMetrics(user, systemPriority, queuePriority, easternNow, status, waitMinutes) {
+function getAssignmentMetrics(user, systemPriority, queuePriority, easternNow, status, waitMinutes, regionId = selectedAssignmentRegionId) {
   return {
     systemPriority: systemPriority >= 0 ? systemPriority : Number.POSITIVE_INFINITY,
     queuePriority,
-    teamPriority: getTeamPriority(user.id),
+    teamPriority: getTeamPriority(user.id, regionId),
     currentMinutes: easternNow.minutes,
     scheduleStart: status.availabilityStart,
     waitMinutes,
@@ -5273,7 +6819,7 @@ function compareQueueRows(left, right) {
     return statusDifference;
   }
 
-  const preset = getAssignmentRulePreset(data.assignmentRules?.preset);
+  const preset = getAssignmentRulePreset(getScopedAssignmentRules(selectedAssignmentRegionId)?.preset);
   for (const rule of preset.rules) {
     const difference = compareQueueRowsByRule(left, right, rule);
     if (difference !== 0) {
@@ -5342,12 +6888,13 @@ function compareQueueRowsByRule(left, right, rule) {
 }
 
 function shouldCompareCoverageQueue(left, right) {
-  return (left.status === "available" && right.status === "available")
-    || left.availabilityStart === right.availabilityStart;
+  return left.status === "available"
+    && right.status === "available"
+    && (Number.isFinite(left.queuePriority) || Number.isFinite(right.queuePriority));
 }
 
-function getTeamPriority(userId) {
-  const index = data.users.findIndex((user) => user.id === userId);
+function getTeamPriority(userId, regionId = GLOBAL_REGION_SCOPE_ID) {
+  const index = getRankedUsersForRegionScope(regionId).findIndex((user) => user.id === userId);
   return index >= 0 ? index : Number.POSITIVE_INFINITY;
 }
 
@@ -5363,17 +6910,18 @@ function getQueueStatusRank(row) {
   return 2;
 }
 
-function getEffectiveQueueNow(easternNow) {
-  if (data.users.some((user) => getUserStatus(user, easternNow).selectable)) {
+function getEffectiveQueueNow(easternNow, regionId = selectedAssignmentRegionId) {
+  const users = getUsersForRegionScope(regionId);
+  if (users.some((user) => getUserStatus(user, easternNow, regionId).selectable)) {
     return easternNow;
   }
 
   for (let offset = 1; offset <= 21; offset += 1) {
     const date = formatDate(addDays(parseDate(easternNow.date), offset));
-    const nextStart = getEarliestQueueAvailabilityStart(date);
+    const nextStart = getEarliestQueueAvailabilityStart(date, regionId);
     if (nextStart !== null) {
       const candidateNow = buildEasternNow(date, minutesToTime(nextStart));
-      if (data.users.some((user) => getUserStatus(user, candidateNow).selectable)) {
+      if (users.some((user) => getUserStatus(user, candidateNow, regionId).selectable)) {
         return candidateNow;
       }
     }
@@ -5382,9 +6930,9 @@ function getEffectiveQueueNow(easternNow) {
   return easternNow;
 }
 
-function getEarliestQueueAvailabilityStart(date) {
+function getEarliestQueueAvailabilityStart(date, regionId = selectedAssignmentRegionId) {
   const day = getDayNameFromDate(date);
-  const starts = data.users.flatMap((user) => (
+  const starts = getUsersForRegionScope(regionId).flatMap((user) => (
     getScheduleWindowsForDate(user, date, day)
       .map((window) => toMinutes(window.start))
       .filter((start) => Number.isFinite(start))
@@ -5485,9 +7033,9 @@ function getLastAssignmentTimestampForUserOnDate(user, date) {
   return Math.max(...assignments.map(getAssignmentTimestamp));
 }
 
-function getDailyCoverageAssignmentCount(system, date) {
+function getDailyCoverageAssignmentCount(system, date, regionId = GLOBAL_REGION_SCOPE_ID) {
   return data.assignmentLog.filter((entry) => (
-    getAssignmentEntryDate(entry) === date && isAssignmentForSystem(entry, system)
+    getAssignmentEntryDate(entry) === date && isAssignmentForSystem(entry, system, regionId)
   )).length;
 }
 
@@ -5519,7 +7067,12 @@ function getAssignmentsForUserOnDate(user, date) {
   ));
 }
 
-function isAssignmentForSystem(entry, system) {
+function isAssignmentForSystem(entry, system, regionId = GLOBAL_REGION_SCOPE_ID) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  if ((entry.regionId || GLOBAL_REGION_SCOPE_ID) !== normalizedRegionId) {
+    return false;
+  }
+
   return entry.systemId === system.id || (!entry.systemId && entry.systemName === system.name);
 }
 
@@ -5578,8 +7131,8 @@ function getOrdinalLabel(number) {
   return `${number}${suffixes[number % 10] || "th"}`;
 }
 
-function getUserStatus(user, easternNow) {
-  const holidayMatches = getHolidaysForUser(user.id, easternNow.date);
+function getUserStatus(user, easternNow, regionId = GLOBAL_REGION_SCOPE_ID) {
+  const holidayMatches = getHolidaysForUser(user.id, easternNow.date, regionId);
   if (holidayMatches.length > 0) {
     return {
       status: "holiday",
@@ -5660,8 +7213,7 @@ function getUserStatus(user, easternNow) {
 
 function getScheduleWindowsForDate(user, date, day) {
   const scheduleWindows = user.schedules
-    .filter((schedule) => isScheduleActiveOnDate(schedule, date, day))
-    .map((schedule) => ({ id: schedule.id, source: "schedule", start: schedule.start, end: schedule.end }));
+    .flatMap((schedule) => getScheduleWindowsForScheduleOnDate(schedule, user, date, day));
 
   const extraWindows = data.exceptions
     .filter((slot) => slot.userId === user.id && slot.date === date && slot.type === "extra")
@@ -5671,6 +7223,100 @@ function getScheduleWindowsForDate(user, date, day) {
     .concat(extraWindows)
     .filter((window) => isValidTimeRange(window.start, window.end))
     .sort((left, right) => toMinutes(left.start) - toMinutes(right.start));
+}
+
+function getScheduleWindowsForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date)) {
+  if (!isValidScheduleTimeRange(schedule.start, schedule.end)) {
+    return [];
+  }
+
+  const startOffset = getScheduleStartDayOffset(schedule, user);
+  const endOffset = getScheduleEndDayOffset(schedule, user);
+  const candidateDates = Array.from(new Set([
+    formatDate(addDays(parseDate(date), -startOffset)),
+    formatDate(addDays(parseDate(date), -endOffset))
+  ]));
+  const windows = [];
+  candidateDates.forEach((scheduleDate) => {
+    if (!isScheduleActiveOnDate(schedule, scheduleDate, getDayNameFromDate(scheduleDate))) {
+      return;
+    }
+
+    const startDate = getScheduleEndpointDate(scheduleDate, schedule, "start", user);
+    const endDate = getScheduleEndpointDate(scheduleDate, schedule, "end", user);
+    if (startDate === endDate && date === startDate) {
+      windows.push({
+        id: schedule.id,
+        source: "schedule",
+        start: schedule.start,
+        end: schedule.end,
+        removeDate: scheduleDate
+      });
+      return;
+    }
+
+    if (date === startDate) {
+      windows.push({
+        id: schedule.id,
+        source: "schedule",
+        start: schedule.start,
+        end: END_OF_DAY_TIME,
+        removeDate: scheduleDate
+      });
+    }
+
+    if (date === endDate) {
+      windows.push({
+        id: schedule.id,
+        source: "schedule",
+        start: "00:00",
+        end: schedule.end,
+        removeDate: scheduleDate
+      });
+    }
+  });
+
+  return windows;
+}
+
+function getScheduleEndpointDate(date, schedule, endpoint, user = null) {
+  const offset = endpoint === "start"
+    ? getScheduleStartDayOffset(schedule, user)
+    : getScheduleEndDayOffset(schedule, user);
+  return formatDate(addDays(parseDate(date), offset));
+}
+
+function getScheduleStartDayOffset(schedule, user = null) {
+  return getNormalizedScheduleDayOffset(schedule?.startDayOffset, getInferredScheduleStartDayOffset(schedule, user));
+}
+
+function getScheduleEndDayOffset(schedule, user = null) {
+  const fallbackEndOffset = getScheduleStartDayOffset(schedule, user) + (toMinutes(schedule.end) <= toMinutes(schedule.start) ? 1 : 0);
+  return getNormalizedScheduleDayOffset(schedule?.endDayOffset, fallbackEndOffset);
+}
+
+function getNormalizedScheduleDayOffset(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= -1 && number <= 1
+    ? number
+    : fallback;
+}
+
+function getInferredScheduleStartDayOffset(schedule, user = null) {
+  return schedule
+    && !Number.isInteger(Number(schedule.startDayOffset))
+    && toMinutes(schedule.start) > toMinutes(schedule.end)
+    && userBelongsToAsiaRegion(user)
+    ? -1
+    : 0;
+}
+
+function userBelongsToAsiaRegion(user) {
+  return Array.isArray(user?.regionIds) && user.regionIds.some((regionId) => {
+    const region = getRegionById(regionId);
+    const label = `${region?.id || regionId} ${region?.name || ""}`.toLowerCase();
+    return label.includes("apac") || label.includes("asia") || label.includes("pacific");
+  });
 }
 
 function isScheduleActiveOnDate(schedule, date, day = getDayNameFromDate(date)) {
@@ -5699,8 +7345,54 @@ function findNextAvailableStart(currentMinutes, windows, breaks) {
   return null;
 }
 
-function getHolidaysForUser(userId, date) {
-  return data.holidays.filter((holiday) => holiday.date === date && (holiday.userId === userId || holiday.userId === GLOBAL_HOLIDAY_USER_ID));
+function getHolidaysForUser(userId, date, regionId = GLOBAL_REGION_SCOPE_ID) {
+  const holidays = [];
+  holidays.push(...getGlobalIndividualHolidays().filter((holiday) => holiday.date === date && holiday.userId === userId));
+
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  if (normalizedRegionId) {
+    holidays.push(...getRegionHolidayMatchesForUser(userId, date, normalizedRegionId));
+  } else if (areRegionsEnabled()) {
+    const user = getUserFromReference(userId);
+    (user?.regionIds || []).forEach((userRegionId) => {
+      holidays.push(...getRegionHolidayMatchesForUser(userId, date, userRegionId));
+    });
+  } else {
+    holidays.push(...data.holidays.filter((holiday) => (
+      holiday.date === date
+        && holiday.userId === GLOBAL_HOLIDAY_USER_ID
+    )));
+  }
+
+  return dedupeHolidays(holidays);
+}
+
+function getRegionHolidayMatchesForUser(userId, date, regionId) {
+  return getScopedHolidays(regionId).filter((holiday) => (
+    holiday.date === date
+      && (holiday.userId === userId || holiday.userId === GLOBAL_HOLIDAY_USER_ID)
+  ));
+}
+
+function getGlobalIndividualHolidays() {
+  return data.holidays.filter((holiday) => holiday.userId !== GLOBAL_HOLIDAY_USER_ID);
+}
+
+function getGlobalIndividualHolidaysForRegion(regionId) {
+  const regionUserIds = new Set(getUsersForRegionScope(regionId).map((user) => user.id));
+  return getGlobalIndividualHolidays().filter((holiday) => regionUserIds.has(holiday.userId));
+}
+
+function dedupeHolidays(holidays) {
+  const seen = new Set();
+  return holidays.filter((holiday) => {
+    const key = `${holiday.userId}:${holiday.date}:${holiday.name || "Holiday"}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function exportData() {
@@ -6165,6 +7857,182 @@ function validateData(candidate) {
   });
 }
 
+function normalizeAssignmentRulesConfig(config) {
+  const source = config && typeof config === "object" ? config : DEFAULT_ASSIGNMENT_RULES;
+  return {
+    preset: getAssignmentRulePreset(source.preset).id
+  };
+}
+
+function normalizeShiftTemplateRecords(templates, fallbackTemplates = DEFAULT_SHIFT_TEMPLATES) {
+  const normalizedTemplates = Array.isArray(templates) && templates.length > 0
+    ? templates
+    : cloneData(fallbackTemplates);
+
+  return normalizedTemplates.map((template) => {
+    const normalized = {
+      id: template.id || makeId(template.name || "shift", []),
+      name: template.name || template.label || "Shift",
+      start: template.start || "09:00",
+      end: template.end || "17:00"
+    };
+    normalizeScheduleTimeFields(normalized, "09:00", "17:00");
+    return normalized;
+  });
+}
+
+function normalizeHolidayRecords(holidays) {
+  const normalizedHolidays = Array.isArray(holidays) ? holidays : [];
+  normalizedHolidays.forEach((holiday) => {
+    holiday.id ||= makeRecordId("holiday");
+    holiday.userId ||= GLOBAL_HOLIDAY_USER_ID;
+    holiday.name ||= "Holiday";
+  });
+  return normalizedHolidays.sort((left, right) => (left.date || "").localeCompare(right.date || ""));
+}
+
+function migrateGlobalAllUserHolidaysToRegions() {
+  if (!areRegionsEnabled() || data.regions.length === 0) {
+    return;
+  }
+
+  const globalAllUserHolidays = data.holidays.filter((holiday) => holiday.userId === GLOBAL_HOLIDAY_USER_ID);
+  if (globalAllUserHolidays.length === 0) {
+    return;
+  }
+
+  data.regions.forEach((region) => {
+    const regionHolidays = getScopedHolidays(region.id);
+    globalAllUserHolidays.forEach((holiday) => {
+      const alreadyExists = regionHolidays.some((existing) => (
+        existing.userId === GLOBAL_HOLIDAY_USER_ID
+          && existing.date === holiday.date
+          && (existing.name || "Holiday") === (holiday.name || "Holiday")
+      ));
+      if (!alreadyExists) {
+        regionHolidays.push({
+          ...holiday,
+          id: makeRecordId("holiday")
+        });
+      }
+    });
+  });
+
+  data.holidays = data.holidays.filter((holiday) => holiday.userId !== GLOBAL_HOLIDAY_USER_ID);
+}
+
+function normalizeSystemRecords(systems, queues, allowedUserIds = null, fallbackRegionId = GLOBAL_REGION_SCOPE_ID) {
+  const normalizedSystems = Array.isArray(systems) ? systems : [];
+  normalizedSystems.forEach((system) => {
+    system.regionIds = normalizeSystemRegionIds(system, fallbackRegionId);
+    delete system.regionId;
+    const allowedIds = allowedUserIds || new Set(data.users
+      .filter((user) => userBelongsToAnyRegion(user, system.regionIds))
+      .map((user) => user.id));
+    system.serviceNowConfigItem = String(system.serviceNowConfigItem || system.configItem || system.configurationItem || "").trim();
+    system.primaryUserIds = Array.isArray(system.primaryUserIds)
+      ? system.primaryUserIds.filter((userId) => allowedIds.has(userId))
+      : [];
+    if (!(system.id in queues)) {
+      queues[system.id] = 0;
+    }
+    const queueMax = Math.max(system.primaryUserIds.length - 1, 0);
+    queues[system.id] = Math.min(Math.max(Number(queues[system.id] || 0), 0), queueMax);
+  });
+  Object.keys(queues).forEach((systemId) => {
+    if (!normalizedSystems.some((system) => system.id === systemId)) {
+      delete queues[systemId];
+    }
+  });
+  return normalizedSystems;
+}
+
+function normalizeSystemRegionIds(system, fallbackRegionId = GLOBAL_REGION_SCOPE_ID) {
+  if (!areRegionsEnabled() || data.regions.length === 0) {
+    return [];
+  }
+
+  const validRegionIds = new Set(data.regions.map((region) => region.id));
+  const sourceIds = Array.isArray(system?.regionIds)
+    ? system.regionIds
+    : system?.regionId
+      ? [system.regionId]
+      : [];
+  const normalizedIds = Array.from(new Set(sourceIds.map(String).filter((regionId) => validRegionIds.has(regionId))));
+  if (normalizedIds.length > 0) {
+    return normalizedIds;
+  }
+
+  const fallbackId = normalizeRegionScopeId(fallbackRegionId);
+  return fallbackId ? [fallbackId] : data.regions.map((region) => region.id);
+}
+
+function mergeLegacyRegionalSystems() {
+  if (!data.regionalSettings || typeof data.regionalSettings !== "object") {
+    return;
+  }
+
+  data.regions.forEach((region) => {
+    const regionalSystems = Array.isArray(data.regionalSettings?.[region.id]?.systems)
+      ? data.regionalSettings[region.id].systems
+      : [];
+    regionalSystems.forEach((regionalSystem) => {
+      if (!regionalSystem?.id || !regionalSystem?.name) {
+        return;
+      }
+
+      let system = data.systems.find((item) => item.id === regionalSystem.id)
+        || data.systems.find((item) => item.name === regionalSystem.name);
+      if (!system) {
+        system = {
+          id: regionalSystem.id,
+          name: regionalSystem.name,
+          regionIds: [],
+          primaryUserIds: [],
+          serviceNowConfigItem: ""
+        };
+        data.systems.push(system);
+      }
+
+      system.regionIds = Array.from(new Set((system.regionIds || []).concat(region.id)));
+      system.primaryUserIds = Array.from(new Set((system.primaryUserIds || []).concat(regionalSystem.primaryUserIds || [])));
+      system.serviceNowConfigItem ||= String(regionalSystem.serviceNowConfigItem || "").trim();
+    });
+  });
+}
+
+function normalizeRegionSettings(regionId) {
+  data.regionalSettings ||= {};
+  const source = data.regionalSettings[regionId] && typeof data.regionalSettings[regionId] === "object"
+    ? data.regionalSettings[regionId]
+    : createDefaultRegionSettings(regionId);
+  source.assignmentRules = normalizeAssignmentRulesConfig(source.assignmentRules);
+  source.shiftTemplates = normalizeShiftTemplateRecords(source.shiftTemplates, createDefaultRegionShiftTemplates(regionId));
+  syncRegionCoverageShift(regionId, source.shiftTemplates);
+  source.teamOrderIds = normalizeTeamOrderIds(source.teamOrderIds, regionId);
+  source.queues = source.queues && typeof source.queues === "object" ? source.queues : {};
+  normalizeScopedQueues(source.queues, getScopedSystems(regionId));
+  source.holidays = normalizeHolidayRecords(source.holidays);
+  delete source.systems;
+  delete source.systemsSeeded;
+  data.regionalSettings[regionId] = source;
+}
+
+function normalizeScopedQueues(queues, systems) {
+  systems.forEach((system) => {
+    if (!(system.id in queues)) {
+      queues[system.id] = 0;
+    }
+    const queueMax = Math.max(system.primaryUserIds.length - 1, 0);
+    queues[system.id] = Math.min(Math.max(Number(queues[system.id] || 0), 0), queueMax);
+  });
+  Object.keys(queues).forEach((systemId) => {
+    if (!systems.some((system) => system.id === systemId)) {
+      delete queues[systemId];
+    }
+  });
+}
+
 function getIncidentConfig() {
   return normalizeIncidentConfig(data?.incidentConfig);
 }
@@ -6275,10 +8143,7 @@ function normalizeAssignmentIncident(entry) {
 function normalizeData() {
   data.assignmentLog = Array.isArray(data.assignmentLog) ? data.assignmentLog : [];
   data.assignmentLog.forEach(normalizeAssignmentIncident);
-  data.assignmentRules = data.assignmentRules && typeof data.assignmentRules === "object"
-    ? data.assignmentRules
-    : { ...DEFAULT_ASSIGNMENT_RULES };
-  data.assignmentRules.preset = getAssignmentRulePreset(data.assignmentRules.preset).id;
+  data.assignmentRules = normalizeAssignmentRulesConfig(data.assignmentRules);
   data.incidentConfig = normalizeIncidentConfig(data.incidentConfig);
   data.exceptions = Array.isArray(data.exceptions) ? data.exceptions : [];
   data.holidays = Array.isArray(data.holidays) ? data.holidays : [];
@@ -6290,23 +8155,24 @@ function normalizeData() {
     if (!name) {
       return;
     }
+    const id = makeId(region.id || name, normalizedRegions.map((item) => item.id));
+    const fallbackCoverage = getDefaultRegionCoverageWindow(id, name);
+    const coverageStart = isValidTimeInput(region.coverageStart || region.start || "")
+      ? region.coverageStart || region.start
+      : fallbackCoverage.coverageStart;
+    const coverageEnd = isValidTimeInput(region.coverageEnd || region.end || "")
+      ? region.coverageEnd || region.end
+      : fallbackCoverage.coverageEnd;
     normalizedRegions.push({
-      id: makeId(region.id || name, normalizedRegions.map((item) => item.id)),
-      name
+      id,
+      name,
+      coverageStart: isValidRegionCoverageTimeRange(coverageStart, coverageEnd) ? coverageStart : fallbackCoverage.coverageStart,
+      coverageEnd: isValidRegionCoverageTimeRange(coverageStart, coverageEnd) ? coverageEnd : fallbackCoverage.coverageEnd
     });
   });
   data.regions = normalizedRegions;
 
-  data.shiftTemplates = Array.isArray(data.shiftTemplates) && data.shiftTemplates.length > 0
-    ? data.shiftTemplates
-    : cloneData(DEFAULT_SHIFT_TEMPLATES);
-  data.shiftTemplates = data.shiftTemplates.map((template) => ({
-    id: template.id || makeId(template.name || "shift", []),
-    name: template.name || template.label || "Shift",
-    start: template.start || "09:00",
-    end: template.end || "17:00"
-  }));
-  data.shiftTemplates.forEach((template) => normalizeForwardTimeFields(template, "09:00", "17:00"));
+  data.shiftTemplates = normalizeShiftTemplateRecords(data.shiftTemplates);
   data.displayTimezones = Array.isArray(data.displayTimezones) && data.displayTimezones.length > 0
     ? data.displayTimezones.map((tz) => {
         if (!tz.label) {
@@ -6327,7 +8193,8 @@ function normalizeData() {
       schedule.id ||= makeRecordId("schedule");
       schedule.shiftType ||= inferShiftType(schedule.start, schedule.end);
       schedule.days = Array.isArray(schedule.days) ? schedule.days : [];
-      normalizeForwardTimeFields(schedule, "09:00", "17:00");
+      normalizeScheduleTimeFields(schedule, "09:00", "17:00");
+      normalizeScheduleDayOffsetFields(schedule);
       if (schedule.startDate && !isValidDateInput(schedule.startDate)) {
         delete schedule.startDate;
       }
@@ -6349,21 +8216,19 @@ function normalizeData() {
   });
   data.exceptions.sort(compareDateTimeRecords);
 
-  data.holidays.forEach((holiday) => {
-    holiday.id ||= makeRecordId("holiday");
-    holiday.userId ||= GLOBAL_HOLIDAY_USER_ID;
-    holiday.name ||= "Holiday";
-  });
-  data.holidays.sort((left, right) => (left.date || "").localeCompare(right.date || ""));
-
-  data.systems.forEach((system) => {
-    system.serviceNowConfigItem = String(system.serviceNowConfigItem || system.configItem || system.configurationItem || "").trim();
-    system.primaryUserIds = system.primaryUserIds.filter((userId) => data.users.some((user) => user.id === userId));
-    if (!(system.id in data.queues)) {
-      data.queues[system.id] = 0;
+  data.holidays = normalizeHolidayRecords(data.holidays);
+  data.regionalSettings = data.regionalSettings && typeof data.regionalSettings === "object" ? data.regionalSettings : {};
+  mergeLegacyRegionalSystems();
+  data.systems = normalizeSystemRecords(data.systems, data.queues);
+  Object.keys(data.regionalSettings).forEach((regionId) => {
+    if (!validRegionIds.has(regionId)) {
+      delete data.regionalSettings[regionId];
     }
-    clampQueue(system.id);
   });
+  if (hasRegionalScopes()) {
+    data.regions.forEach((region) => normalizeRegionSettings(region.id));
+    migrateGlobalAllUserHolidaysToRegions();
+  }
 
   const normalizedDelegationSlots = [];
   (Array.isArray(data.delegationSlots) ? data.delegationSlots : []).forEach((slot) => {
@@ -6464,28 +8329,72 @@ function normalizeForwardTimeFields(record, fallbackStart, fallbackEnd) {
   }
 }
 
+function normalizeScheduleTimeFields(record, fallbackStart, fallbackEnd) {
+  if (!isValidTimeInput(record.start || "")) {
+    record.start = fallbackStart;
+  }
+  if (!isValidTimeInput(record.end || "")) {
+    record.end = fallbackEnd;
+  }
+  if (!isValidScheduleTimeRange(record.start, record.end)) {
+    record.start = fallbackStart;
+    record.end = fallbackEnd;
+  }
+}
+
+function normalizeScheduleDayOffsetFields(record) {
+  ["startDayOffset", "endDayOffset"].forEach((field) => {
+    if (record[field] === undefined || record[field] === null || record[field] === "") {
+      delete record[field];
+      return;
+    }
+
+    const offset = Number(record[field]);
+    if (Number.isInteger(offset) && offset >= -1 && offset <= 1) {
+      record[field] = offset;
+      return;
+    }
+
+    delete record[field];
+  });
+}
+
 function rebuildQueuesFromAssignmentLog() {
   const rebuiltQueues = {};
   data.systems.forEach((system) => {
     rebuiltQueues[system.id] = 0;
+  });
+  const rebuiltRegionalQueues = {};
+  const activeRegions = hasRegionalScopes() ? data.regions : [];
+  activeRegions.forEach((region) => {
+    rebuiltRegionalQueues[region.id] = {};
+    getScopedSystems(region.id).forEach((system) => {
+      rebuiltRegionalQueues[region.id][system.id] = 0;
+    });
   });
 
   data.assignmentLog
     .slice()
     .sort((left, right) => getAssignmentTimestamp(left) - getAssignmentTimestamp(right))
     .forEach((entry) => {
-      const system = data.systems.find((item) => isAssignmentForSystem(entry, item));
+      const regionId = normalizeRegionScopeId(entry.regionId);
+      const systems = getScopedSystems(regionId);
+      const queues = regionId ? rebuiltRegionalQueues[regionId] : rebuiltQueues;
+      const system = systems.find((item) => isAssignmentForSystem(entry, item, regionId));
       if (!system || system.primaryUserIds.length === 0) {
         return;
       }
 
       const userIndex = system.primaryUserIds.indexOf(entry.userId);
       if (userIndex >= 0) {
-        rebuiltQueues[system.id] = (userIndex + 1) % system.primaryUserIds.length;
+        queues[system.id] = (userIndex + 1) % system.primaryUserIds.length;
       }
     });
 
   data.queues = rebuiltQueues;
+  activeRegions.forEach((region) => {
+    getRegionSettings(region.id).queues = rebuiltRegionalQueues[region.id];
+  });
 }
 
 function setDefaultDates() {
@@ -6562,13 +8471,16 @@ function updateScheduleRangeConstraints() {
 
 function updateForwardTimeInputConstraints() {
   [
-    [elements.scheduleStartInput, elements.scheduleEndInput],
     [elements.slotStartInput, elements.slotEndInput],
-    [elements.shiftStartInput, elements.shiftEndInput],
     [elements.delegationStartInput, elements.delegationEndInput]
   ].forEach(([startInput, endInput]) => {
     if (startInput && endInput) {
       endInput.min = startInput.value || "";
+    }
+  });
+  [elements.scheduleEndInput, elements.shiftEndInput].forEach((endInput) => {
+    if (endInput) {
+      endInput.min = "";
     }
   });
 }
@@ -6582,12 +8494,16 @@ function getBusinessWeekRange(date) {
 }
 
 function graphBlock(block, options = {}) {
-  const label = formatGraphBlockText(block.start, block.end, block.type, block.label, block.date);
+  if (!isGraphBlockVisible(block)) {
+    return "";
+  }
+
+  const label = formatGraphBlockLabel(block);
   const edgeLabels = graphEdgeLabels(block);
   const interiorLabel = formatGraphBlockInteriorText(block.type, block.label);
   return `
     ${edgeLabels}
-    <span class="graph-block ${block.type}" style="${timeRangeStyle(block.start, block.end)}" title="${escapeHtml(label)}">
+    <span class="graph-block ${block.type}" style="${timeRangeStyle(block)}" title="${escapeHtml(label)}">
       ${options.hideLabel || !interiorLabel ? "" : `<span>${escapeHtml(interiorLabel)}</span>`}
       ${graphRemoveButton(block)}
     </span>
@@ -6604,52 +8520,61 @@ function graphDraftBlock(userId, date) {
     type: "draft",
     label: "Draft",
     date,
+    sourceDate: draft.sourceDate || date,
     start: draft.start,
     end: draft.end
   };
+  if (!isGraphBlockVisible(draftBlock)) {
+    return "";
+  }
 
   return `
     ${graphEdgeLabels(draftBlock)}
-    <span class="graph-block draft" style="${timeRangeStyle(draft.start, draft.end)}" title="Drag to move before saving">
+    <span class="graph-block draft" style="${timeRangeStyle(draftBlock)}" title="Drag to move before saving">
       <span>New schedule</span>
     </span>
   `;
 }
 
 function weekGraphPill(block) {
-  const label = formatGraphBlockText(block.start, block.end, block.type, block.label, block.date);
+  const label = formatGraphBlockLabel(block);
+  const compactLabel = formatGraphBlockLabel(block, { includeTimezone: false });
+  const title = block.type === "schedule"
+    ? `Click to update schedule: ${label}`
+    : label;
   const editAttributes = block.type === "schedule"
     ? `
       data-action="edit-schedule"
       data-user-id="${escapeHtml(block.userId)}"
       data-schedule-id="${escapeHtml(block.id)}"
-      data-date="${escapeHtml(block.date)}"
-      title="Click to update schedule"
+      data-date="${escapeHtml(block.removeDate || block.date)}"
     `
     : "";
   return `
-    <span class="week-pill ${block.type}"${editAttributes}>
-      <span>${escapeHtml(label)}</span>
+    <span class="week-pill ${block.type}" title="${escapeHtml(title)}"${editAttributes}>
+      <span>${escapeHtml(compactLabel)}</span>
       ${graphRemoveButton(block)}
     </span>
   `;
 }
 
 function graphEdgeLabels(block) {
-  if (block.type === "holiday") {
+  if (block.type === "holiday" || block.type === "break") {
     return "";
   }
 
-  const start = formatEasternTimeInputForDisplay(block.date || getScheduleReferenceDate(), block.start);
-  const end = formatEasternTimeInputForDisplay(block.date || getScheduleReferenceDate(), block.end);
+  const start = getGraphEndpointDisplayParts(block, "start");
+  const end = getGraphEndpointDisplayParts(block, "end");
+  const showDayOffsets = shouldShowGraphDayOffsets(start, end);
+  const anchorDayOffset = getGraphDayOffsetAnchor(start, end, showDayOffsets);
   return `
-    <span class="graph-edge-label ${escapeHtml(block.type)} start" style="${timeStartStyle(block.start)}">${escapeHtml(start)}</span>
-    <span class="graph-edge-label ${escapeHtml(block.type)} end" style="${timeEndStyle(block.end)}">${escapeHtml(end)}</span>
+    <span class="graph-edge-label ${escapeHtml(block.type)} start" style="${timeStartStyle(block)}">${escapeHtml(formatGraphEndpointPartLabel(start, showDayOffsets, anchorDayOffset))}</span>
+    <span class="graph-edge-label ${escapeHtml(block.type)} end" style="${timeEndStyle(block)}">${escapeHtml(formatGraphEndpointPartLabel(end, showDayOffsets, anchorDayOffset))}</span>
   `;
 }
 
 function formatGraphBlockInteriorText(type, label) {
-  if (type === "schedule") {
+  if (type === "schedule" || type === "break") {
     return "";
   }
 
@@ -6661,7 +8586,7 @@ function formatGraphBlockInteriorText(type, label) {
 }
 
 function graphRemoveButton(block) {
-  const label = formatGraphBlockText(block.start, block.end, block.type, block.label, block.date);
+  const label = formatGraphBlockLabel(block);
   if (block.type === "schedule") {
     return `
       <button
@@ -6670,7 +8595,7 @@ function graphRemoveButton(block) {
         data-action="remove-schedule"
         data-user-id="${escapeHtml(block.userId)}"
         data-schedule-id="${escapeHtml(block.id)}"
-        data-date="${escapeHtml(block.date)}"
+        data-date="${escapeHtml(block.removeDate || block.date)}"
         aria-label="Remove schedule ${escapeHtml(label)}"
       >×</button>
     `;
@@ -6691,39 +8616,144 @@ function graphRemoveButton(block) {
   return "";
 }
 
-function formatGraphBlockText(start, end, type, label, date = getScheduleReferenceDate()) {
-  if (type === "schedule") {
-    return `${formatEasternTimeInputForDisplay(date, start)}–${formatEasternTimeInputForDisplay(date, end)}`;
+function formatGraphBlockLabel(block, options = {}) {
+  if (block.type === "holiday") {
+    return block.label;
   }
 
-  if (type === "holiday") {
-    return label;
+  const range = formatGraphTimeRangeForDisplay(block, options);
+  if (block.type === "schedule") {
+    return range;
   }
 
-  return `${label} · ${formatEasternTimeInputForDisplay(date, start)}–${formatEasternTimeInputForDisplay(date, end)}`;
+  return `${block.label} · ${range}`;
 }
 
-function timeRangeStyle(start, end) {
-  const startMinutes = Math.max(toMinutes(start), TIMELINE_START_MINUTES);
-  const endMinutes = Math.min(toMinutes(end), TIMELINE_END_MINUTES);
-  const total = TIMELINE_END_MINUTES - TIMELINE_START_MINUTES;
-  const left = ((startMinutes - TIMELINE_START_MINUTES) / total) * 100;
-  const width = Math.max(((endMinutes - startMinutes) / total) * 100, 1);
+function formatGraphTimeRangeForDisplay(block, { includeTimezone = true } = {}) {
+  const start = getGraphEndpointDisplayParts(block, "start");
+  const end = getGraphEndpointDisplayParts(block, "end");
+  const showDayOffsets = shouldShowGraphDayOffsets(start, end);
+  const anchorDayOffset = getGraphDayOffsetAnchor(start, end, showDayOffsets);
+  const timezoneLabel = start.abbreviation === end.abbreviation
+    ? start.abbreviation
+    : `${start.abbreviation}/${end.abbreviation}`;
+  const range = `${formatGraphEndpointPartLabel(start, showDayOffsets, anchorDayOffset)}–${formatGraphEndpointPartLabel(end, showDayOffsets, anchorDayOffset)}`;
+  return includeTimezone ? `${range} ${timezoneLabel}` : range;
+}
+
+function formatGraphEndpointPartLabel(parts, showDayOffset = true, anchorDayOffset = 0) {
+  return `${parts.time}${showDayOffset ? formatGraphDayOffsetLabel(parts.dayOffset - anchorDayOffset) : ""}`;
+}
+
+function shouldShowGraphDayOffsets(startParts, endParts) {
+  return startParts.dayOffset !== endParts.dayOffset;
+}
+
+function getGraphDayOffsetAnchor(startParts, endParts, showDayOffsets) {
+  return 0;
+}
+
+function getGraphEndpointDisplayParts(block, endpoint) {
+  const sourceDate = block.sourceDate || block.removeDate || block.date || getScheduleReferenceDate();
+  const graphDate = block.date || sourceDate;
+  const endpointDate = endpoint === "end" && toMinutes(block.end) <= toMinutes(block.start)
+    ? formatDate(addDays(parseDate(sourceDate), 1))
+    : sourceDate;
+  const endpointTime = endpoint === "start" ? block.start : block.end;
+  const instant = zonedWallTimeToDate(endpointDate, endpointTime, EASTERN_TIME_ZONE);
+  const timezone = getSelectedDisplayTimezone();
+  const displayParts = getZonedDateTimeParts(instant, timezone.timeZone);
+  const dayOffset = getDateOffset(graphDate, displayParts.date);
+  return {
+    time: displayParts.time,
+    dayOffset,
+    abbreviation: getTimezoneAbbreviation(instant, timezone)
+  };
+}
+
+function formatGraphDayOffsetLabel(offset) {
+  if (offset === 0) {
+    return "";
+  }
+
+  const marker = offset > 0 ? `+${offset}` : `‑${Math.abs(offset)}`;
+  return ` (T${marker})`;
+}
+
+function timeRangeStyle(block) {
+  const graphRange = getScheduleGraphTimeRange();
+  const blockRange = getGraphBlockRange(block, graphRange);
+  if (!blockRange) {
+    return "display:none;";
+  }
+
+  const startMinutes = Math.max(blockRange.start, graphRange.start);
+  const endMinutes = Math.min(blockRange.end, graphRange.end);
+  const left = ((startMinutes - graphRange.start) / graphRange.duration) * 100;
+  const width = Math.max(((endMinutes - startMinutes) / graphRange.duration) * 100, 1);
   return `left:${left}%;width:${width}%;`;
 }
 
-function timeStartStyle(start) {
-  const startMinutes = Math.max(toMinutes(start), TIMELINE_START_MINUTES);
-  const total = TIMELINE_END_MINUTES - TIMELINE_START_MINUTES;
-  const left = Math.min(((startMinutes - TIMELINE_START_MINUTES) / total) * 100, 92);
+function timeStartStyle(block) {
+  const graphRange = getScheduleGraphTimeRange();
+  const blockRange = getGraphBlockAbsoluteRange(block);
+  const startMinutes = Math.min(Math.max(blockRange?.start ?? graphRange.start, graphRange.start), graphRange.end);
+  const left = Math.min(((startMinutes - graphRange.start) / graphRange.duration) * 100, 92);
   return `left:${left}%;`;
 }
 
-function timeEndStyle(end) {
-  const endMinutes = Math.min(toMinutes(end), TIMELINE_END_MINUTES);
-  const total = TIMELINE_END_MINUTES - TIMELINE_START_MINUTES;
-  const left = Math.max(((endMinutes - TIMELINE_START_MINUTES) / total) * 100, 0);
+function timeEndStyle(block) {
+  const graphRange = getScheduleGraphTimeRange();
+  const blockRange = getGraphBlockAbsoluteRange(block);
+  const endMinutes = Math.min(Math.max(blockRange?.end ?? graphRange.end, graphRange.start), graphRange.end);
+  const left = Math.max(((endMinutes - graphRange.start) / graphRange.duration) * 100, 0);
   return `left:${left}%;`;
+}
+
+function isGraphBlockVisible(block, graphRange = getScheduleGraphTimeRange()) {
+  return Boolean(getGraphBlockRange(block, graphRange));
+}
+
+function getGraphBlockRange(block, graphRange = getScheduleGraphTimeRange()) {
+  const blockRange = getGraphBlockAbsoluteRange(block);
+  if (!blockRange) {
+    return null;
+  }
+
+  const visibleStart = Math.max(blockRange.start, graphRange.start);
+  const visibleEnd = Math.min(blockRange.end, graphRange.end);
+  return visibleEnd > visibleStart
+    ? blockRange
+    : null;
+}
+
+function getGraphBlockAbsoluteRange(block) {
+  if (Number.isFinite(block?.graphStartMinutes) && Number.isFinite(block?.graphEndMinutes)) {
+    return { start: block.graphStartMinutes, end: block.graphEndMinutes };
+  }
+  if (!block || !isValidTimeInput(block.start || "") || !isValidTimeInput(block.end || "")) {
+    return null;
+  }
+
+  const graphDate = block.date || getScheduleReferenceDate();
+  const sourceDate = block.sourceDate || block.removeDate || graphDate;
+  const startMinutes = getDateOffset(graphDate, sourceDate) * 24 * 60 + toMinutes(block.start);
+  const endSourceDate = toMinutes(block.end) <= toMinutes(block.start)
+    ? formatDate(addDays(parseDate(sourceDate), 1))
+    : sourceDate;
+  let endMinutes = getDateOffset(graphDate, endSourceDate) * 24 * 60 + toMinutes(block.end);
+  if (endMinutes <= startMinutes) {
+    endMinutes += 24 * 60;
+  }
+
+  return { start: startMinutes, end: endMinutes };
+}
+
+function toGraphMinutes(time, graphRange = getScheduleGraphTimeRange()) {
+  const minutes = toMinutes(time);
+  return graphRange.end > 24 * 60 && minutes < graphRange.start
+    ? minutes + 24 * 60
+    : minutes;
 }
 
 function getEasternNow() {
@@ -6879,19 +8909,10 @@ function getZonedDateTimeParts(date, timeZone) {
 }
 
 function getTimezoneAbbreviation(date, timezone) {
-  if (timezone.id === "utc") {
-    return "UTC";
-  }
-  if (timezone.id === "ist") {
-    return "IST";
-  }
-
   const offsetMinutes = getTimeZoneOffsetMinutes(date, timezone.timeZone);
-  if (timezone.id === "et") {
-    return offsetMinutes === -300 ? "EST" : "EDT";
-  }
-  if (timezone.id === "london") {
-    return offsetMinutes === 60 ? "BST" : "GMT";
+  const configuredAbbreviation = TIMEZONE_ABBREVIATIONS[timezone.id]?.[String(offsetMinutes)];
+  if (configuredAbbreviation) {
+    return configuredAbbreviation;
   }
 
   try {
@@ -7097,26 +9118,30 @@ function compareDateTimeValues(startDate, startTime, endDate, endTime) {
   return left.localeCompare(right);
 }
 
-function getQueueIndex(system) {
-  return Math.min(Math.max(Number(data.queues[system.id] || 0), 0), Math.max(system.primaryUserIds.length - 1, 0));
+function getQueueIndex(system, regionId = selectedAssignmentRegionId) {
+  const queues = getScopedQueues(regionId);
+  return Math.min(Math.max(Number(queues[system.id] || 0), 0), Math.max(system.primaryUserIds.length - 1, 0));
 }
 
-function clampQueue(systemId) {
-  const system = data.systems.find((item) => item.id === systemId);
+function clampQueue(systemId, regionId = selectedAdminRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  const queues = getScopedQueues(normalizedRegionId);
+  const system = getScopedSystems(normalizedRegionId).find((item) => item.id === systemId);
   if (!system || system.primaryUserIds.length === 0) {
-    data.queues[systemId] = 0;
+    queues[systemId] = 0;
     return;
   }
 
-  data.queues[systemId] = getQueueIndex(system);
+  queues[systemId] = getQueueIndex(system, normalizedRegionId);
 }
 
 function inferShiftType(start, end) {
   return data.shiftTemplates.find((template) => template.start === start && template.end === end)?.id || "custom";
 }
 
-function getShiftTemplate(shiftType) {
-  return data.shiftTemplates.find((template) => template.id === shiftType);
+function getShiftTemplate(shiftType, regionId = selectedAdminRegionId) {
+  const parsedValue = parseShiftTemplateSelectValue(shiftType, regionId);
+  return getScopedShiftTemplates(parsedValue.regionId).find((template) => template.id === parsedValue.templateId);
 }
 
 function makeId(name, existingIds) {

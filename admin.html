@@ -18,7 +18,7 @@
     <header class="hero">
       <div class="hero-topbar">
         <a class="brand-lockup" href="index.html" aria-label="Go to assignment queue">
-          <img src="logo.png" alt="" aria-hidden="true" class="logo-img">
+          <img src="images/logo.png" alt="" aria-hidden="true" class="logo-img">
           <span class="logo-wordmark">SME Queue</span>
         </a>
         <div class="hero-actions">
@@ -57,8 +57,15 @@
         <div class="section-heading">
           <div>
             <p class="eyebrow">Admin</p>
-            <h2>Users, schedules, coverage, and exceptions</h2>
           </div>
+        </div>
+
+        <div id="adminRegionScopeCard" class="admin-region-scope-card hidden">
+          <label class="field admin-region-scope-field">
+            <span class="sr-only">Admin view</span>
+            <select id="adminRegionScopeSelect"></select>
+          </label>
+          <p id="adminRegionScopeHint" class="meta"></p>
         </div>
 
         <div class="tabs" role="tablist" aria-label="Admin sections">
@@ -89,6 +96,7 @@
             </label>
             <button class="primary-button" type="submit">Add team member</button>
           </form>
+          <p id="usersScopeMeta" class="meta"></p>
           <div id="usersList" class="stack-list team-list"></div>
         </section>
 
@@ -106,8 +114,17 @@
               <span>Region name</span>
               <input id="regionNameInput" type="text" placeholder="Enter region name" autocomplete="off" required>
             </label>
+            <label class="field compact-time-field">
+              <span>Region hours start ET</span>
+              <input id="regionCoverageStartInput" type="time" value="07:00" required>
+            </label>
+            <label class="field compact-time-field">
+              <span>Region hours end ET</span>
+              <input id="regionCoverageEndInput" type="time" value="19:00" required>
+            </label>
             <button class="primary-button" type="submit">Add region</button>
           </form>
+          <p class="meta">Region hours can cross midnight and must be 14 hours or less. This is the expected regional window, not staffed coverage.</p>
           <div id="regionsList" class="stack-list"></div>
         </section>
 
@@ -153,9 +170,9 @@
               </div>
             </form>
 
-            <div class="card-form">
+            <div class="card-form schedule-graph-card">
               <h3 id="scheduleGraphTitle">Schedule graph</h3>
-              <div class="two-columns">
+              <div class="two-columns schedule-graph-controls">
                 <label class="field">
                   <span>View</span>
                   <select id="scheduleViewSelect">
@@ -183,7 +200,7 @@
 
             <section class="card-form wide-card">
               <div>
-                <h3>Breaks and extra slots</h3>
+                <h3>Availability changes</h3>
               </div>
               <form id="addSlotForm" class="slot-form">
                 <div class="two-columns">
@@ -210,11 +227,11 @@
                   <span>Comment</span>
                   <input id="slotReasonInput" type="text" required>
                 </label>
-                <button class="primary-button" type="submit">Add timeline slot</button>
+                <button class="primary-button" type="submit">Add change</button>
               </form>
 
               <div>
-                <h3>Existing breaks and extra slots</h3>
+                <h3>Saved changes</h3>
                 <div id="slotsList" class="stack-list"></div>
               </div>
             </section>
@@ -226,8 +243,7 @@
             <div class="card-form wide-card">
               <div class="section-heading tight">
                 <div>
-                  <p class="eyebrow">Delegation</p>
-                  <h3 id="delegationGraphTitle">Delegation ownership</h3>
+                  <p class="eyebrow">Global delegation</p>
                 </div>
                 <button id="toggleDelegationSlotEditorButton" class="secondary-button" type="button">Edit time slots</button>
               </div>
@@ -244,7 +260,6 @@
                   <input id="delegationGraphDateInput" type="date">
                 </label>
               </div>
-              <p class="meta">Only users scheduled for the full slot, including extra slots, can be selected as delegators. Holidays and breaks block selection.</p>
               <div id="delegationCanvas" class="delegation-assignment-board day-board" aria-label="Delegation ownership board"></div>
               <button id="saveDelegationAssignmentsButton" class="primary-button" type="button">Save delegation ownership</button>
             </div>
@@ -279,6 +294,7 @@
             <div>
               <p class="eyebrow">Assignment policy</p>
               <h3>Recommendation priority</h3>
+              <p id="assignmentRulesScopeMeta" class="meta"></p>
             </div>
             <div id="assignmentPolicyDescriptions" class="policy-description-list"></div>
             <button class="primary-button" type="submit">Save assignment rules</button>
@@ -288,7 +304,10 @@
         <section id="shiftsTab" class="tab-panel" data-lockable-admin-tab="shifts">
           <section class="shift-current-section">
             <div class="shift-section-heading">
-              <h3>Current shifts</h3>
+              <div>
+                <h3>Current shifts</h3>
+                <p id="shiftsScopeMeta" class="meta"></p>
+              </div>
               <button id="showAddShiftButton" class="primary-button" type="button" aria-expanded="false" aria-controls="addShiftForm">Add shift</button>
             </div>
             <div id="shiftsList" class="stack-list shift-list"></div>
@@ -325,6 +344,7 @@
             <button class="primary-button" type="submit">Add system</button>
           </form>
           <div class="systems-list-heading">Existing systems</div>
+          <p id="systemsScopeMeta" class="meta"></p>
           <div id="systemsList" class="stack-list systems-list"></div>
         </section>
 
@@ -349,8 +369,6 @@
 
         <section id="timezonesTab" class="tab-panel" data-lockable-admin-tab="timezones">
           <p class="eyebrow">Time zones</p>
-          <h3>Display timezones</h3>
-          <p class="meta">Select which timezones appear in the clock dropdown.</p>
           <div id="timezoneList" class="stack-list"></div>
           <form id="addTimezoneForm" class="inline-form">
             <label class="field">
@@ -384,8 +402,8 @@
                 <label class="incident-choice-card">
                   <input type="radio" name="incidentCreationMode" value="redirect">
                   <span>
-                    <strong>Redirect to another page</strong>
-                    <small>Open the configured redirect link after assignment.</small>
+                    <strong>Open another page</strong>
+                    <small>Show an Open incident button after assignment; the user chooses when to launch it.</small>
                   </span>
                 </label>
                 <label class="incident-choice-card">
@@ -399,10 +417,10 @@
 
               <div id="incidentRedirectSettings" class="incident-settings-panel">
                 <label class="field">
-                  <span>Redirect link</span>
+                  <span>Incident link</span>
                   <input id="incidentRedirectUrlInput" type="url" placeholder="https://www.google.com/">
                 </label>
-                <p class="meta">The app redirects to this exact link after assignment. No query parameters are added.</p>
+                <p class="meta">The app opens this exact link in a new tab after assignment. No query parameters are added.</p>
               </div>
 
               <div id="incidentServiceNowSettings" class="incident-settings-panel">
