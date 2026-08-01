@@ -223,19 +223,6 @@ function getScopedSystems(regionId = GLOBAL_REGION_SCOPE_ID) {
   return data.systems.filter((system) => getSystemRegionIds(system).includes(normalizedId));
 }
 
-function setScopedSystems(regionId, systems) {
-  const normalizedId = normalizeRegionScopeId(regionId);
-  if (normalizedId) {
-    const scopedSystemIds = new Set(systems.map((system) => system.id));
-    data.systems = data.systems
-      .filter((system) => !getSystemRegionIds(system).includes(normalizedId) || scopedSystemIds.has(system.id))
-      .map((system) => systems.find((item) => item.id === system.id) || system);
-    return;
-  }
-
-  data.systems = systems;
-}
-
 function getScopedQueues(regionId = GLOBAL_REGION_SCOPE_ID) {
   return normalizeRegionScopeId(regionId)
     ? getRegionSettings(regionId).queues
@@ -469,13 +456,6 @@ function createDefaultRegionShiftTemplates(regionId = GLOBAL_REGION_SCOPE_ID) {
     start: coverageWindow.start,
     end: coverageWindow.end
   }];
-}
-
-function createQueuesForSystems(systems = []) {
-  return systems.reduce((queues, system) => {
-    queues[system.id] = 0;
-    return queues;
-  }, {});
 }
 
 const DEFAULT_SHIFT_TEMPLATES = [
@@ -715,11 +695,8 @@ const elements = {
   scheduleStartLabel: document.querySelector("#scheduleStartLabel"),
   scheduleEndLabel: document.querySelector("#scheduleEndLabel"),
   scheduleGraphTitle: document.querySelector("#scheduleGraphTitle"),
-  slotStartLabel: document.querySelector("#slotStartLabel"),
-  slotEndLabel: document.querySelector("#slotEndLabel"),
   shiftStartLabel: document.querySelector("#shiftStartLabel"),
   shiftEndLabel: document.querySelector("#shiftEndLabel"),
-  timelineUserSelect: document.querySelector("#timelineUserSelect"),
   timelineDateInput: document.querySelector("#timelineDateInput"),
   timelineCanvas: document.querySelector("#timelineCanvas"),
   timelineDraftActions: document.querySelector("#timelineDraftActions"),
@@ -731,16 +708,10 @@ const elements = {
   toggleDelegationSlotEditorButton: document.querySelector("#toggleDelegationSlotEditorButton"),
   closeDelegationSlotEditorButton: document.querySelector("#closeDelegationSlotEditorButton"),
   delegationSlotEditor: document.querySelector("#delegationSlotEditor"),
-  addDelegationForm: document.querySelector("#addDelegationForm"),
-  delegationSlotSelect: document.querySelector("#delegationSlotSelect"),
-  delegationSlotMeta: document.querySelector("#delegationSlotMeta"),
-  delegationUserSelect: document.querySelector("#delegationUserSelect"),
-  delegationDateInput: document.querySelector("#delegationDateInput"),
   delegationStartInput: document.querySelector("#delegationStartInput"),
   delegationEndInput: document.querySelector("#delegationEndInput"),
   delegationStartLabel: document.querySelector("#delegationStartLabel"),
   delegationEndLabel: document.querySelector("#delegationEndLabel"),
-  delegationNoteInput: document.querySelector("#delegationNoteInput"),
   delegationViewSelect: document.querySelector("#delegationViewSelect"),
   delegationGraphDateLabel: document.querySelector("#delegationGraphDateLabel"),
   delegationGraphDateInput: document.querySelector("#delegationGraphDateInput"),
@@ -748,14 +719,7 @@ const elements = {
   delegationAssignmentBoard: document.querySelector("#delegationAssignmentBoard"),
   saveDelegationAssignmentsButton: document.querySelector("#saveDelegationAssignmentsButton"),
   delegationSlotsList: document.querySelector("#delegationSlotsList"),
-  delegationsList: document.querySelector("#delegationsList"),
   delegationAssignmentsList: document.querySelector("#delegationAssignmentsList"),
-  addSlotForm: document.querySelector("#addSlotForm"),
-  slotDateInput: document.querySelector("#slotDateInput"),
-  slotStartInput: document.querySelector("#slotStartInput"),
-  slotEndInput: document.querySelector("#slotEndInput"),
-  slotReasonInput: document.querySelector("#slotReasonInput"),
-  slotsList: document.querySelector("#slotsList"),
   addSystemForm: document.querySelector("#addSystemForm"),
   systemNameInput: document.querySelector("#systemNameInput"),
   systemsList: document.querySelector("#systemsList"),
@@ -946,12 +910,10 @@ function bindEvents() {
   });
   on(elements.scheduleEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.scheduleViewSelect, "change", renderTimezoneSensitiveAdminViews);
-  on(elements.timelineUserSelect, "change", renderTimelineTools);
   on(elements.timelineDateInput, "change", () => {
     syncScheduleDateRangeToGraphWeek();
     renderTimezoneSensitiveAdminViews();
   });
-  on(elements.slotDateInput, "change", renderAdminTimezoneLabels);
   on(elements.timelineCanvas, "pointerdown", startTimelineDraft);
   on(elements.timelineCanvas, "pointermove", moveTimelineDraft);
   on(elements.timelineCanvas, "click", prefillSlotFromTimeline);
@@ -961,22 +923,11 @@ function bindEvents() {
   on(elements.toggleDelegationSlotEditorButton, "click", () => toggleDelegationSlotEditor());
   on(elements.closeDelegationSlotEditorButton, "click", () => setDelegationSlotEditorVisible(false));
   on(elements.saveDelegationAssignmentsButton, "click", saveDelegationAssignmentBoard);
-  on(elements.addDelegationForm, "submit", addDelegation);
-  on(elements.delegationSlotSelect, "change", renderDelegationSlotSelectMeta);
-  on(elements.delegationDateInput, "change", () => {
-    if (elements.delegationGraphDateInput && !elements.delegationGraphDateInput.value) {
-      elements.delegationGraphDateInput.value = elements.delegationDateInput.value;
-    }
-    renderDelegations();
-  });
   on(elements.delegationViewSelect, "change", renderDelegations);
   on(elements.delegationGraphDateInput, "change", renderDelegations);
   on(elements.delegationCanvas, "change", handleDelegationOwnerSelectChange);
   on(elements.delegationStartInput, "input", updateForwardTimeInputConstraints);
   on(elements.delegationEndInput, "input", updateForwardTimeInputConstraints);
-  on(elements.addSlotForm, "submit", addTimelineSlot);
-  on(elements.slotStartInput, "input", updateForwardTimeInputConstraints);
-  on(elements.slotEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.addSystemForm, "submit", addSystem);
   on(elements.addHolidayForm, "submit", addHoliday);
   on(elements.holidayTypeSelect, "change", renderHolidayFormMode);
@@ -1419,7 +1370,6 @@ function changeDisplayTimezone() {
 
   const previousTimezone = getSelectedDisplayTimezone();
   const scheduleFormTimes = captureScheduleFormTimes(previousTimezone);
-  const slotFormTimes = captureSlotFormTimes(previousTimezone);
   const shiftAddFormTimes = captureShiftAddFormTimes(previousTimezone);
   const holidayFormTimes = captureHolidayFormTimes(previousTimezone);
   const delegationFormTimes = captureDelegationFormTimes(previousTimezone);
@@ -1429,7 +1379,6 @@ function changeDisplayTimezone() {
     clearDevModeState();
   }
   restoreScheduleFormTimes(scheduleFormTimes);
-  restoreSlotFormTimes(slotFormTimes);
   restoreShiftAddFormTimes(shiftAddFormTimes);
   restoreHolidayFormTimes(holidayFormTimes);
   restoreDelegationFormTimes(delegationFormTimes);
@@ -1457,8 +1406,6 @@ function renderAdminTimezoneLabels() {
     [elements.scheduleStartLabel, `Start ${abbreviation}`],
     [elements.scheduleEndLabel, `End ${abbreviation}`],
     [elements.scheduleGraphTitle, `Schedule graph (${abbreviation})`],
-    [elements.slotStartLabel, `Start ${abbreviation}`],
-    [elements.slotEndLabel, `End ${abbreviation}`],
     [elements.holidayStartLabel, `Start ${holidayAbbreviation}`],
     [elements.holidayEndLabel, `End ${holidayAbbreviation}`],
     [elements.delegationStartLabel, `Start ${delegationAbbreviation}`],
@@ -1547,12 +1494,6 @@ function initializeAdminTimeInputs() {
   if (elements.scheduleEndInput) {
     elements.scheduleEndInput.value = formatEasternTimeInputForDisplay(date, elements.scheduleEndInput.value || "17:00");
   }
-  if (elements.slotStartInput) {
-    elements.slotStartInput.value = formatEasternTimeInputForDisplay(date, elements.slotStartInput.value || "12:00");
-  }
-  if (elements.slotEndInput) {
-    elements.slotEndInput.value = formatEasternTimeInputForDisplay(date, elements.slotEndInput.value || "12:30");
-  }
   if (elements.shiftStartInput) {
     elements.shiftStartInput.value = formatEasternTimeInputForDisplay(date, elements.shiftStartInput.value || "09:00");
   }
@@ -1599,32 +1540,6 @@ function restoreScheduleFormTimes(times) {
   }
   if (elements.scheduleEndInput) {
     elements.scheduleEndInput.value = formatEasternTimeInputForDisplay(date, times.end);
-  }
-}
-
-function captureSlotFormTimes(timezone) {
-  if (!elements.slotStartInput || !elements.slotEndInput) {
-    return null;
-  }
-
-  const date = elements.slotDateInput?.value || getScheduleReferenceDate();
-  return {
-    start: convertDisplayDateTimeToEastern(date, elements.slotStartInput.value, timezone).time,
-    end: convertDisplayDateTimeToEastern(date, elements.slotEndInput.value, timezone).time
-  };
-}
-
-function restoreSlotFormTimes(times) {
-  if (!times) {
-    return;
-  }
-
-  const date = elements.slotDateInput?.value || getScheduleReferenceDate();
-  if (elements.slotStartInput) {
-    elements.slotStartInput.value = formatEasternTimeInputForDisplay(date, times.start);
-  }
-  if (elements.slotEndInput) {
-    elements.slotEndInput.value = formatEasternTimeInputForDisplay(date, times.end);
   }
 }
 
@@ -1853,9 +1768,7 @@ function renderSystemSelect() {
 
 function renderUserSelectors() {
   fillUserSelect(elements.scheduleUserSelect, false, "", selectedAdminRegionId);
-  fillUserSelect(elements.timelineUserSelect, false, "", selectedAdminRegionId);
   fillHolidayUserSelect();
-  fillUserSelect(elements.delegationUserSelect, false, "Unassigned");
 }
 
 function fillHolidayUserSelect() {
@@ -1927,33 +1840,6 @@ function restoreSelectValue(select, selectedValue) {
 
 function getRegionHolidaySelectValue(regionId) {
   return `${REGION_HOLIDAY_USER_PREFIX}${regionId}`;
-}
-
-function fillCoverageSelect(select, includeAllCoverage = false) {
-  if (!select) {
-    return;
-  }
-
-  const selectedValue = select.value;
-  select.innerHTML = "";
-
-  if (includeAllCoverage) {
-    const allOption = document.createElement("option");
-    allOption.value = "";
-    allOption.textContent = "All coverage";
-    select.append(allOption);
-  }
-
-  getScopedSystems(selectedAdminRegionId).forEach((system) => {
-    const option = document.createElement("option");
-    option.value = system.id;
-    option.textContent = system.name;
-    select.append(option);
-  });
-
-  if ([...select.options].some((option) => option.value === selectedValue)) {
-    select.value = selectedValue;
-  }
 }
 
 function renderShiftTemplateSelect() {
@@ -2964,40 +2850,6 @@ function renderIncidentAction(entry) {
   return `<button class="primary-button incident-action-link" type="button" data-action="open-servicenow-incident-form" data-assignment-id="${escapeHtml(entry.id)}">Add incident details</button>`;
 }
 
-function renderTeamsIncidentMessage(entry, incident = {}) {
-  const template = getIncidentConfig().teams.messageTemplate;
-  return fillIncidentTemplate(template, getIncidentTemplateVariables(entry, incident));
-}
-
-function getIncidentTemplateVariables(entry, incident = {}) {
-  const assignedAt = formatAssignmentTimestamp(entry);
-  const incidentUrl = incident.url || buildIncidentHandoffUrl(entry);
-  const variables = {
-    assignee: entry.userName || "Removed user",
-    assignee_mention: entry.userName ? `@ ${entry.userName}` : "",
-    coverage: entry.systemName || "Removed system",
-    assigned_at: assignedAt,
-    assignedAt,
-    incident_url: incidentUrl,
-    incidentUrl,
-    servicenow_incident_id: incident.serviceNowIncidentId || incident.incidentId || "",
-    servicenowIncidentId: incident.serviceNowIncidentId || incident.incidentId || ""
-  };
-
-  const descriptionTemplate = incident.serviceNowIncidentDescription
-    || incident.description
-    || getIncidentConfig().serviceNow.shortDescriptionTemplate;
-  variables.servicenow_incident_description = fillIncidentTemplate(descriptionTemplate, variables);
-  variables.servicenowIncidentDescription = variables.servicenow_incident_description;
-  return variables;
-}
-
-function fillIncidentTemplate(template, variables) {
-  return String(template || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (placeholder, key) => (
-    Object.prototype.hasOwnProperty.call(variables, key) ? variables[key] : placeholder
-  ));
-}
-
 function bindIncidentActionButtons(container) {
   container?.querySelectorAll("[data-action='open-servicenow-incident-form']").forEach((button) => {
     button.addEventListener("click", () => openServiceNowIncidentModal(button.dataset.assignmentId));
@@ -3574,14 +3426,13 @@ function renderDayCheckboxes() {
 }
 
 function renderTimelineTools() {
-  if (!elements.timelineCanvas && !elements.slotsList) {
+  if (!elements.timelineCanvas) {
     return;
   }
 
   updateGraphDateCopy();
   renderTimeline();
   renderTimelineDraftActions();
-  renderSlots();
 }
 
 function updateGraphDateCopy() {
@@ -3996,51 +3847,6 @@ function compareGraphSortKeys(left, right) {
   return 0;
 }
 
-function graphBlocksOverlap(leftBlock, rightBlock) {
-  return toMinutes(leftBlock.start) < toMinutes(rightBlock.end) && toMinutes(rightBlock.start) < toMinutes(leftBlock.end);
-}
-
-function renderSlots() {
-  if (!elements.slotsList) {
-    return;
-  }
-
-  const visibleUserIds = new Set(getUsersForRegionScope(selectedAdminRegionId).map((user) => user.id));
-  const visibleSlotDates = getVisibleTimelineSlotDates();
-  const rows = data.exceptions
-    .slice()
-    .filter((slot) => isValidDateInput(slot.date || "") && visibleSlotDates.has(slot.date) && visibleUserIds.has(slot.userId))
-    .sort((left, right) => `${left.date} ${left.start}`.localeCompare(`${right.date} ${right.start}`))
-    .map((slot) => {
-      const user = data.users.find((item) => item.id === slot.userId);
-      const abbreviation = getSelectedTimezoneAbbreviationForDate(slot.date);
-      const start = formatEasternTimeInputForDisplay(slot.date, slot.start);
-      const end = formatEasternTimeInputForDisplay(slot.date, slot.end);
-      const slotTypeLabel = slot.type === "extra" ? "Extra slot" : "Break";
-      return `
-        <div class="list-item">
-          <div>
-            <div class="item-title">${escapeHtml(slotTypeLabel)} · ${escapeHtml(slot.reason || "No comment")}</div>
-            <div class="meta">${escapeHtml(user?.name || "Removed user")} · ${formatDisplayDate(slot.date)} · ${start}–${end} ${escapeHtml(abbreviation)}</div>
-          </div>
-          <button class="remove-button" type="button" data-action="remove-slot" data-slot-id="${escapeHtml(slot.id)}">Remove</button>
-        </div>
-      `;
-    }).join("");
-
-  elements.slotsList.innerHTML = rows || emptyState("No changes.");
-  elements.slotsList.querySelectorAll("[data-action='remove-slot']").forEach((button) => {
-    button.addEventListener("click", () => removeTimelineSlot(button.dataset.slotId));
-  });
-}
-
-function getVisibleTimelineSlotDates() {
-  const date = elements.timelineDateInput?.value || getEasternNow().date;
-  const view = elements.scheduleViewSelect?.value || "week";
-  const dates = view === "week" ? getWeekDates(date) : [date];
-  return new Set(dates.flatMap((visibleDate) => getGraphSourceDatesForRange(visibleDate)));
-}
-
 function shouldShowServiceNowCoverageConfigItems() {
   const config = getIncidentConfig();
   return config.enabled && config.mode === "servicenow";
@@ -4252,8 +4058,6 @@ function bindHolidayRemoveButtons() {
 }
 
 function renderDelegationSlots() {
-  renderDelegationSlotSelect();
-
   if (!elements.delegationSlotsList) {
     return;
   }
@@ -4271,37 +4075,6 @@ function renderDelegationSlots() {
   elements.delegationSlotsList.querySelectorAll("[data-action='remove-delegation-slot']").forEach((button) => {
     button.addEventListener("click", () => removeDelegationSlot(button.dataset.slotId));
   });
-}
-
-function renderDelegationSlotSelect() {
-  if (!elements.delegationSlotSelect) {
-    return;
-  }
-
-  const selectedValue = elements.delegationSlotSelect.value;
-  const slots = getSortedDelegationSlots();
-  elements.delegationSlotSelect.innerHTML = slots.length > 0
-    ? slots.map((slot) => `<option value="${escapeHtml(slot.id)}">${escapeHtml(formatDelegationSlotDefinition(slot))}</option>`).join("")
-    : "<option value=\"\" disabled selected>Create a coverage slot first</option>";
-
-  if (slots.some((slot) => slot.id === selectedValue)) {
-    elements.delegationSlotSelect.value = selectedValue;
-  } else if (slots[0]) {
-    elements.delegationSlotSelect.value = slots[0].id;
-  }
-
-  renderDelegationSlotSelectMeta();
-}
-
-function renderDelegationSlotSelectMeta() {
-  if (!elements.delegationSlotMeta) {
-    return;
-  }
-
-  const slot = getSelectedDelegationSlot();
-  elements.delegationSlotMeta.textContent = slot
-    ? formatDelegationSlotDefinition(slot)
-    : "Create predefined coverage slots before assigning delegators.";
 }
 
 function toggleDelegationSlotEditor() {
@@ -5608,64 +5381,6 @@ function getScheduleDateRangeSummary(schedule) {
   return `${formatDisplayDate(startDate)}–${formatDisplayDate(endDate)}`;
 }
 
-function addTimelineSlot(event) {
-  event.preventDefault();
-  const user = data.users.find((item) => item.id === elements.timelineUserSelect.value);
-  if (!user) {
-    showGenericAlert("Missing user", "Add a user before adding a change.");
-    return;
-  }
-
-  const displayStart = elements.slotStartInput.value;
-  const displayEnd = elements.slotEndInput.value;
-  if (!isForwardTimeRange(displayStart, displayEnd)) {
-    showGenericAlert("Invalid time", "Slot start time must be earlier than end time.");
-    return;
-  }
-
-  if (!elements.slotDateInput.value) {
-    showGenericAlert("Missing date", "Choose a break or extra slot date.");
-    return;
-  }
-
-  const reason = elements.slotReasonInput.value.trim();
-  if (!reason) {
-    showGenericAlert("Missing comment", "Add a comment.");
-    return;
-  }
-
-  const start = convertDisplayDateTimeToEastern(elements.slotDateInput.value, displayStart);
-  const end = convertDisplayDateTimeToEastern(elements.slotDateInput.value, displayEnd);
-  if (!isSameDayForwardEasternRange(start, end)) {
-    showGenericAlert("Invalid time", "Slot times must stay older-to-newer on the same Eastern day.");
-    return;
-  }
-
-  data.exceptions.push({
-    id: makeRecordId("slot"),
-    userId: user.id,
-    date: start.date,
-    type: inferTimelineSlotType(user, start.date, start.time, end.time),
-    start: start.time,
-    end: end.time,
-    reason
-  });
-
-  if (elements.timelineDateInput) {
-    elements.timelineDateInput.value = elements.slotDateInput.value;
-  }
-  elements.slotReasonInput.value = "";
-  completeAdminSave("Change saved.");
-}
-
-function inferTimelineSlotType(user, date, start, end) {
-  const day = getDayNameFromDate(date);
-  const overlapsSchedule = getScheduleWindowsForDate(user, date, day)
-    .some((window) => graphBlocksOverlap({ start, end }, window));
-
-  return overlapsSchedule ? "break" : "extra";
-}
-
 function removeTimelineSlot(slotId) {
   data.exceptions = data.exceptions.filter((slot) => slot.id !== slotId);
   completeAdminSave("Change removed.");
@@ -5770,13 +5485,6 @@ function renderLiveDraftOverlay(lane) {
   wrapper.dataset.liveDraft = "true";
   wrapper.innerHTML = graphDraftBlock(draft.userId, draft.date);
   lane.append(wrapper);
-}
-
-function clearLiveDraftOverlays() {
-  elements.timelineCanvas?.querySelectorAll(".graph-lane").forEach((lane) => {
-    lane.querySelectorAll("[data-live-draft], .graph-edge-label.draft, .graph-block.draft").forEach((element) => element.remove());
-    lane.classList.remove("has-draft", "moving-draft");
-  });
 }
 
 function getTimelineDraft(userId, date) {
@@ -6033,10 +5741,6 @@ function prefillScheduleForm(userId, date, start, end, forceCustom, options = {}
     elements.scheduleUserSelect.value = userId;
   }
 
-  if (elements.timelineUserSelect) {
-    elements.timelineUserSelect.value = userId;
-  }
-
   if (elements.shiftTemplateSelect) {
     const quickShiftOptions = getCurrentQuickShiftOptionsFromSelect();
     const optionValues = quickShiftOptions.map((quickShiftOption) => quickShiftOption.value);
@@ -6066,21 +5770,9 @@ function prefillScheduleForm(userId, date, start, end, forceCustom, options = {}
     elements.scheduleEndInput.value = displayEnd;
   }
 
-  if (elements.slotStartInput) {
-    elements.slotStartInput.value = displayStart;
-  }
-
-  if (elements.slotEndInput) {
-    elements.slotEndInput.value = displayEnd;
-  }
-
   selectScheduleDays(options.days || [getDayNameFromDate(date)]);
   updateScheduleRangeConstraints();
   renderScheduleFormMode();
-}
-
-function selectOnlyScheduleDay(day) {
-  selectScheduleDays([day]);
 }
 
 function selectScheduleDays(days) {
@@ -6217,78 +5909,6 @@ function removeDelegationSlot(slotId) {
   });
 }
 
-function addDelegation(event) {
-  event.preventDefault();
-  const selectedSlot = getSelectedDelegationSlot();
-  if (!selectedSlot) {
-    showGenericAlert("Missing coverage slot", "Create and choose a predefined coverage slot before assigning a delegator.");
-    return;
-  }
-
-  const date = elements.delegationDateInput?.value || "";
-  if (!isValidDateInput(date)) {
-    showGenericAlert("Missing date", "Choose a local date for the delegation slot.");
-    return;
-  }
-
-  const delegatorUserId = data.users.some((user) => user.id === elements.delegationUserSelect?.value)
-    ? elements.delegationUserSelect.value
-    : "";
-  const delegatorUser = getUserFromReference(delegatorUserId);
-  const eligibility = delegatorUser
-    ? getDelegatorAssignmentEligibility(delegatorUser, selectedSlot, date)
-    : { selectable: true, reason: "" };
-  if (delegatorUser && !eligibility.selectable) {
-    showGenericAlert("Delegator unavailable", formatDelegatorUnavailableMessage({
-      slot: selectedSlot,
-      date,
-      user: delegatorUser,
-      eligibility
-    }));
-    return;
-  }
-
-  const delegation = {
-    id: makeRecordId("delegation"),
-    delegatorUserId,
-    systemId: "",
-    slotId: selectedSlot.id,
-    slotName: formatDelegationSlotTimeRange(selectedSlot),
-    date,
-    start: selectedSlot.start,
-    end: selectedSlot.end,
-    timezoneId: "et",
-    timeZone: EASTERN_TIME_ZONE,
-    timezoneLabel: "Eastern (New York)",
-    note: elements.delegationNoteInput?.value.trim() || ""
-  };
-
-  const overlap = getDelegationOverlap(delegation);
-  if (overlap) {
-    showGenericAlert("Delegation overlap", `This slot overlaps ${formatDelegationMeta(overlap)}.`);
-    return;
-  }
-
-  data.delegations.push(delegation);
-  elements.delegationNoteInput.value = "";
-  if (elements.delegationGraphDateInput) {
-    elements.delegationGraphDateInput.value = date;
-  }
-  completeAdminSave("Delegation assignment saved.");
-}
-
-function removeDelegation(delegationId) {
-  const delegation = data.delegations.find((item) => item.id === delegationId);
-  if (!delegation) {
-    return;
-  }
-
-  showGenericConfirm("Delete delegation", "Delete this delegation slot?", () => {
-    data.delegations = data.delegations.filter((item) => item.id !== delegationId);
-    completeAdminSave("Delegation slot deleted.");
-  });
-}
-
 function getSortedDelegations(delegations) {
   return delegations
     .slice()
@@ -6343,11 +5963,6 @@ function getDelegationSystemName(delegation) {
   }
 
   return data.systems.find((system) => system.id === delegation.systemId)?.name || "Removed coverage";
-}
-
-function formatDelegationMeta(delegation) {
-  const abbreviation = getSelectedTimezoneAbbreviationForDelegation(delegation);
-  return `${getDelegationSystemName(delegation)} · ${formatDisplayDate(delegation.date)} · ${formatDelegationRecordDisplayTimeRange(delegation)} ${abbreviation}`;
 }
 
 function formatDelegationSlotTimeRange(delegation) {
@@ -6460,10 +6075,6 @@ function formatDelegatorUnavailableMessage({ slot, date, user, eligibility }) {
   return `${user.name} cannot be assigned to ${slotLabel}. ${eligibility.reason}. Choose someone scheduled for the full slot or leave it unassigned.`;
 }
 
-function getSelectedDelegationSlot() {
-  return getDelegationSlotById(elements.delegationSlotSelect?.value || "");
-}
-
 function getDelegationSlotById(slotId) {
   return data.delegationSlots.find((slot) => slot.id === slotId) || null;
 }
@@ -6487,11 +6098,6 @@ function getDelegationSlotDefinitionOverlap(nextSlot) {
   ));
 }
 
-function getDelegationsForLocalDate(date) {
-  return getSortedDelegations(data.delegations)
-    .filter((delegation) => delegation.date === date);
-}
-
 function getDelegationForSlotDate(slot, date) {
   return data.delegations.find((delegation) => isDelegationForSlotDate(delegation, slot, date)) || null;
 }
@@ -6503,14 +6109,6 @@ function isDelegationForSlotDate(delegation, slot, date) {
       delegation.slotId === slot.id
         || (!delegation.slotId && delegation.start === slot.start && delegation.end === slot.end)
     );
-}
-
-function getDelegationOverlap(nextDelegation) {
-  return data.delegations.find((delegation) => (
-    delegation.id !== nextDelegation.id
-      && delegation.date === nextDelegation.date
-      && delegationSlotsOverlap(delegation, nextDelegation)
-  ));
 }
 
 function delegationSlotsOverlap(left, right) {
@@ -7276,11 +6874,6 @@ function getAvailabilityWaitMinutes(referenceNow, effectiveNow, status) {
   const dayOffset = getDateOffset(referenceNow.date, effectiveNow.date);
   const minutesUntilAvailable = dayOffset * 24 * 60 + status.availabilityStart - referenceNow.minutes;
   return Math.max(0, minutesUntilAvailable);
-}
-
-function isBusinessDay(date) {
-  const day = getDayNameFromDate(date);
-  return day !== "Saturday" && day !== "Sunday";
 }
 
 function compareFiniteNumbers(left, right) {
@@ -8886,20 +8479,12 @@ function setDefaultDates() {
 
   syncScheduleDateRangeToGraphWeek(false);
 
-  if (elements.slotDateInput) {
-    elements.slotDateInput.value ||= today;
-  }
-
   if (elements.holidayDateInput) {
     elements.holidayDateInput.value ||= today;
   }
 
-  if (elements.delegationDateInput) {
-    elements.delegationDateInput.value ||= today;
-  }
-
   if (elements.delegationGraphDateInput) {
-    elements.delegationGraphDateInput.value ||= elements.delegationDateInput?.value || today;
+    elements.delegationGraphDateInput.value ||= today;
   }
 }
 
@@ -8952,7 +8537,6 @@ function updateScheduleRangeConstraints() {
 
 function updateForwardTimeInputConstraints() {
   [
-    [elements.slotStartInput, elements.slotEndInput],
     [elements.holidayStartInput, elements.holidayEndInput],
     [elements.delegationStartInput, elements.delegationEndInput]
   ].forEach(([startInput, endInput]) => {
@@ -9274,7 +8858,6 @@ function getScheduleReferenceDate() {
 
 function getDelegationReferenceDate() {
   return elements.delegationGraphDateInput?.value
-    || elements.delegationDateInput?.value
     || getEasternNow().date;
 }
 
