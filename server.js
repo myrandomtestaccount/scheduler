@@ -7,7 +7,7 @@ const path = require("node:path");
 const appRoot = __dirname;
 const args = parseArgs(process.argv.slice(2));
 const port = Number(args.port || process.env.PORT || 4173);
-const host = String(args.host || process.env.HOST || "127.0.0.1");
+const host = String(args.host || process.env.HOST || "0.0.0.0");
 const configDir = path.resolve(
   args["config-dir"]
     || process.env.SCHEDULER_CONFIG_DIR
@@ -41,8 +41,8 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  const displayHost = host === "127.0.0.1" ? "localhost" : host;
-  console.log(`SME Scheduler running at http://${displayHost}:${port}`);
+  console.log("SME Scheduler running:");
+  getServerUrls(host, port).forEach((url) => console.log(`  ${url}`));
   console.log(`Shared config: ${stateFile}`);
   console.log(`JSON snapshots: ${backupDir}`);
 });
@@ -351,6 +351,30 @@ function getContentType(filePath) {
     ".png": "image/png",
     ".svg": "image/svg+xml; charset=utf-8"
   }[extension] || "application/octet-stream";
+}
+
+function getServerUrls(host, port) {
+  const normalizedHost = host.toLowerCase();
+  if (normalizedHost === "0.0.0.0" || normalizedHost === "::") {
+    return [
+      `http://localhost:${port}`,
+      ...getLanAddresses().map((address) => `http://${address}:${port}`)
+    ];
+  }
+
+  const displayHost = host === "127.0.0.1" ? "localhost" : host;
+  return [`http://${displayHost}:${port}`];
+}
+
+function getLanAddresses() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter((networkInterface) => (
+      networkInterface
+        && networkInterface.family === "IPv4"
+        && !networkInterface.internal
+    ))
+    .map((networkInterface) => networkInterface.address);
 }
 
 function parseArgs(rawArgs) {

@@ -1,7 +1,15 @@
-const STORAGE_KEY = "smeScheduler.data.v1";
-const DEBUG_TIME_STORAGE_KEY = "smeScheduler.debugTime.v1";
-const THEME_STORAGE_KEY = "smeScheduler.theme.v1";
-const DISPLAY_TIMEZONE_STORAGE_KEY = "smeScheduler.displayTimezone.v1";
+const STORAGE_NAMESPACE = "scheduler";
+const LEGACY_STORAGE_NAMESPACE = "smeScheduler";
+const STORAGE_KEY = `${STORAGE_NAMESPACE}.data.v1`;
+const DEBUG_TIME_STORAGE_KEY = `${STORAGE_NAMESPACE}.debugTime.v1`;
+const THEME_STORAGE_KEY = `${STORAGE_NAMESPACE}.theme.v1`;
+const DISPLAY_TIMEZONE_STORAGE_KEY = `${STORAGE_NAMESPACE}.displayTimezone.v1`;
+const LEGACY_STORAGE_KEYS = new Map([
+  [STORAGE_KEY, `${LEGACY_STORAGE_NAMESPACE}.data.v1`],
+  [DEBUG_TIME_STORAGE_KEY, `${LEGACY_STORAGE_NAMESPACE}.debugTime.v1`],
+  [THEME_STORAGE_KEY, `${LEGACY_STORAGE_NAMESPACE}.theme.v1`],
+  [DISPLAY_TIMEZONE_STORAGE_KEY, `${LEGACY_STORAGE_NAMESPACE}.displayTimezone.v1`]
+]);
 const SHARED_STATE_ENDPOINT = "/api/state";
 const SHARED_STATE_REFRESH_MS = 10000;
 const THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
@@ -539,6 +547,8 @@ const defaultData = {
   assignmentLog: []
 };
 
+migrateLegacyStorageKeys();
+
 let data = loadData();
 let lastPersistedData = cloneData(data);
 let sharedStateAvailable = false;
@@ -628,9 +638,6 @@ const elements = {
   backupUnlockModal: document.querySelector("#backupUnlockModal"),
   cancelBackupUnlockButton: document.querySelector("#cancelBackupUnlockButton"),
   confirmBackupUnlockButton: document.querySelector("#confirmBackupUnlockButton"),
-  adminToggleButton: document.querySelector("#adminToggleButton"),
-  adminPanel: document.querySelector("#adminPanel"),
-  closeAdminButton: document.querySelector("#closeAdminButton"),
   assignmentRegionField: document.querySelector("#assignmentRegionField"),
   assignmentRegionSelect: document.querySelector("#assignmentRegionSelect"),
   assignmentSystemSelect: document.querySelector("#assignmentSystemSelect"),
@@ -716,7 +723,6 @@ const elements = {
   delegationGraphDateLabel: document.querySelector("#delegationGraphDateLabel"),
   delegationGraphDateInput: document.querySelector("#delegationGraphDateInput"),
   delegationCanvas: document.querySelector("#delegationCanvas"),
-  delegationAssignmentBoard: document.querySelector("#delegationAssignmentBoard"),
   saveDelegationAssignmentsButton: document.querySelector("#saveDelegationAssignmentsButton"),
   delegationSlotsList: document.querySelector("#delegationSlotsList"),
   delegationAssignmentsList: document.querySelector("#delegationAssignmentsList"),
@@ -727,7 +733,11 @@ const elements = {
   addHolidayForm: document.querySelector("#addHolidayForm"),
   holidayUserSelect: document.querySelector("#holidayUserSelect"),
   holidayTypeSelect: document.querySelector("#holidayTypeSelect"),
+  holidayDateRangeFields: document.querySelector("#holidayDateRangeFields"),
+  holidayDateLabel: document.querySelector("#holidayDateLabel"),
   holidayDateInput: document.querySelector("#holidayDateInput"),
+  holidayEndDateField: document.querySelector("#holidayEndDateField"),
+  holidayEndDateInput: document.querySelector("#holidayEndDateInput"),
   holidayTimeFields: document.querySelector("#holidayTimeFields"),
   holidayStartLabel: document.querySelector("#holidayStartLabel"),
   holidayEndLabel: document.querySelector("#holidayEndLabel"),
@@ -931,7 +941,11 @@ function bindEvents() {
   on(elements.addSystemForm, "submit", addSystem);
   on(elements.addHolidayForm, "submit", addHoliday);
   on(elements.holidayTypeSelect, "change", renderHolidayFormMode);
-  on(elements.holidayDateInput, "change", renderAdminTimezoneLabels);
+  on(elements.holidayDateInput, "change", () => {
+    normalizeHolidayDateRangeInputs("start");
+    renderAdminTimezoneLabels();
+  });
+  on(elements.holidayEndDateInput, "change", () => normalizeHolidayDateRangeInputs("end"));
   on(elements.holidayStartInput, "input", updateForwardTimeInputConstraints);
   on(elements.holidayEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.incidentConfigForm, "submit", saveIncidentConfig);
@@ -1046,11 +1060,6 @@ function bindBrowserThemePreference() {
 
 function getSavedTheme() {
   const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
-  if (savedTheme === "bright") {
-    localStorage.setItem(THEME_STORAGE_KEY, "light");
-    return "light";
-  }
-
   return savedTheme === "dark" || savedTheme === "light" ? savedTheme : null;
 }
 
@@ -3964,6 +3973,18 @@ function renderSystems() {
 
 function renderHolidayFormMode() {
   const isTimedBlock = elements.holidayTypeSelect?.value === OOO_TYPE_TIME;
+  if (elements.holidayDateLabel) {
+    elements.holidayDateLabel.textContent = isTimedBlock ? "Date" : "Start date";
+  }
+  elements.holidayDateRangeFields?.classList.toggle("single-date", isTimedBlock);
+  elements.holidayEndDateField?.classList.toggle("hidden", isTimedBlock);
+  if (elements.holidayEndDateInput) {
+    elements.holidayEndDateInput.required = !isTimedBlock;
+    elements.holidayEndDateInput.disabled = isTimedBlock || !isAdminTabUnlocked("holidays");
+    if (!elements.holidayEndDateInput.value) {
+      elements.holidayEndDateInput.value = elements.holidayDateInput?.value || getEasternNow().date;
+    }
+  }
   elements.holidayTimeFields?.classList.toggle("hidden", !isTimedBlock);
   [elements.holidayStartInput, elements.holidayEndInput].forEach((input) => {
     if (input) {
@@ -3971,6 +3992,7 @@ function renderHolidayFormMode() {
       input.disabled = !isTimedBlock || !isAdminTabUnlocked("holidays");
     }
   });
+  normalizeHolidayDateRangeInputs("start");
   updateForwardTimeInputConstraints();
 }
 
@@ -4153,7 +4175,7 @@ function renderDelegationAssignmentBoard(date, view) {
 }
 
 function getDelegationAssignmentContainer() {
-  return elements.delegationAssignmentBoard || elements.delegationCanvas;
+  return elements.delegationCanvas;
 }
 
 function getDelegationWeekDates(date) {
@@ -6352,10 +6374,19 @@ function addHoliday(event) {
 
   const oooType = elements.holidayTypeSelect?.value === OOO_TYPE_TIME ? OOO_TYPE_TIME : OOO_TYPE_ALL_DAY;
   const name = elements.holidayNameInput.value.trim() || "OOO";
+  const startDate = elements.holidayDateInput.value;
+  const endDate = oooType === OOO_TYPE_TIME
+    ? startDate
+    : elements.holidayEndDateInput?.value || startDate;
+  if (!isForwardDateRange(startDate, endDate)) {
+    showGenericAlert("Invalid date range", "OOO end date cannot be before the start date.");
+    return;
+  }
+
   const holiday = {
     id: makeRecordId("holiday"),
     userId: holidayTarget.userId,
-    date: elements.holidayDateInput.value,
+    date: startDate,
     name,
     type: oooType
   };
@@ -6377,10 +6408,15 @@ function addHoliday(event) {
     holiday.date = start.date;
     holiday.start = start.time;
     holiday.end = end.time;
+  } else if (endDate !== startDate) {
+    holiday.endDate = endDate;
   }
   getHolidayTargetList(holidayTarget).push(holiday);
 
   elements.holidayNameInput.value = "";
+  if (elements.holidayEndDateInput) {
+    elements.holidayEndDateInput.value = elements.holidayDateInput.value;
+  }
   completeAdminSave("OOO saved.");
 }
 
@@ -6498,6 +6534,34 @@ function formatHolidayDate(date) {
   return isValidDateInput(date || "") ? formatDisplayDate(date) : date || "No date";
 }
 
+function getOooEndDate(record) {
+  return isValidDateInput(record?.endDate || "") && (record.endDate >= record.date)
+    ? record.endDate
+    : record?.date || "";
+}
+
+function isOooRecordActiveOnDate(record, date) {
+  if (!isValidDateInput(date || "") || !isValidDateInput(record?.date || "")) {
+    return false;
+  }
+
+  if (isTimedOooRecord(record)) {
+    return record.date === date;
+  }
+
+  return record.date <= date && date <= getOooEndDate(record);
+}
+
+function formatOooDateRange(record) {
+  const startDate = record?.date || "";
+  const endDate = getOooEndDate(record);
+  if (!endDate || startDate === endDate) {
+    return formatHolidayDate(startDate);
+  }
+
+  return `${formatHolidayDate(startDate)}–${formatHolidayDate(endDate)}`;
+}
+
 function getOooType(record) {
   return isTimedOooRecord(record) ? OOO_TYPE_TIME : OOO_TYPE_ALL_DAY;
 }
@@ -6529,11 +6593,12 @@ function formatOooRecordLabel(record) {
     return `${formatHolidayDate(displayDate)} · ${start}–${end} ${abbreviation} · ${name}`;
   }
 
-  return `${formatHolidayDate(record.date)} · All day · ${name}`;
+  return `${formatOooDateRange(record)} · All day · ${name}`;
 }
 
 function compareOooRecords(left, right) {
   return (left.date || "").localeCompare(right.date || "")
+    || getOooEndDate(left).localeCompare(getOooEndDate(right))
     || toMinutes(left.start || "00:00") - toMinutes(right.start || "00:00")
     || (left.name || "").localeCompare(right.name || "");
 }
@@ -7273,7 +7338,9 @@ function getTimedOooBlocksForUser(userId, date, regionId = GLOBAL_REGION_SCOPE_I
 
 function getOooRecordsForUser(userId, date, regionId = GLOBAL_REGION_SCOPE_ID) {
   const oooRecords = [];
-  oooRecords.push(...getGlobalIndividualHolidays().filter((holiday) => holiday.date === date && holiday.userId === userId));
+  oooRecords.push(...getGlobalIndividualHolidays().filter((holiday) => (
+    holiday.userId === userId && isOooRecordActiveOnDate(holiday, date)
+  )));
 
   const normalizedRegionId = normalizeRegionScopeId(regionId);
   if (normalizedRegionId) {
@@ -7285,7 +7352,7 @@ function getOooRecordsForUser(userId, date, regionId = GLOBAL_REGION_SCOPE_ID) {
     });
   } else {
     oooRecords.push(...data.holidays.filter((holiday) => (
-      holiday.date === date
+      isOooRecordActiveOnDate(holiday, date)
         && holiday.userId === GLOBAL_HOLIDAY_USER_ID
     )));
   }
@@ -7295,7 +7362,7 @@ function getOooRecordsForUser(userId, date, regionId = GLOBAL_REGION_SCOPE_ID) {
 
 function getRegionHolidayMatchesForUser(userId, date, regionId) {
   return getScopedHolidays(regionId).filter((holiday) => (
-    holiday.date === date
+    isOooRecordActiveOnDate(holiday, date)
       && (holiday.userId === userId || holiday.userId === GLOBAL_HOLIDAY_USER_ID)
   ));
 }
@@ -7312,13 +7379,17 @@ function getGlobalIndividualHolidaysForRegion(regionId) {
 function dedupeHolidays(holidays) {
   const seen = new Set();
   return holidays.filter((holiday) => {
-    const key = `${holiday.userId}:${holiday.date}:${getOooType(holiday)}:${holiday.start || ""}:${holiday.end || ""}:${holiday.name || "OOO"}`;
+    const key = `${holiday.userId}:${holiday.date}:${getOooEndDate(holiday)}:${getOooType(holiday)}:${holiday.start || ""}:${holiday.end || ""}:${holiday.name || "OOO"}`;
     if (seen.has(key)) {
       return false;
     }
     seen.add(key);
     return true;
   });
+}
+
+function getOooRetentionDate(holiday) {
+  return isAllDayOooRecord(holiday) ? getOooEndDate(holiday) : holiday.date;
 }
 
 function exportData() {
@@ -7369,6 +7440,22 @@ function resetData() {
     clearSelectedAssignee();
     completeAdminSave("Sample data restored.", "data");
   });
+}
+
+function migrateLegacyStorageKeys() {
+  try {
+    LEGACY_STORAGE_KEYS.forEach((legacyKey, currentKey) => {
+      const legacyValue = localStorage.getItem(legacyKey);
+      if (legacyValue === null) {
+        return;
+      }
+
+      if (localStorage.getItem(currentKey) === null) {
+        localStorage.setItem(currentKey, legacyValue);
+      }
+      localStorage.removeItem(legacyKey);
+    });
+  } catch {}
 }
 
 function loadData() {
@@ -7669,20 +7756,67 @@ function closeContactDevModal() {
   elements.contactDevModal.setAttribute("aria-hidden", "true");
 }
 
-function copyContactEmail() {
-  const email = elements.contactEmailDisplay?.textContent || "";
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(email).catch(() => {});
+async function copyContactEmail() {
+  const email = elements.contactEmailDisplay?.textContent?.trim() || "";
+  const copied = await copyTextToClipboard(email);
+  setContactCopyButtonState(copied ? "Copied!" : "Copy failed");
+}
+
+async function copyTextToClipboard(text) {
+  if (!text) {
+    return false;
   }
 
-  if (elements.copyContactEmailButton) {
-    elements.copyContactEmailButton.textContent = "Copied!";
-    window.setTimeout(() => {
-      if (elements.copyContactEmailButton) {
-        elements.copyContactEmailButton.textContent = "Copy";
-      }
-    }, 2000);
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {}
   }
+
+  return copyTextWithTemporaryField(text);
+}
+
+function copyTextWithTemporaryField(text) {
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.left = "-9999px";
+  textArea.style.top = "0";
+  document.body.append(textArea);
+
+  const selection = document.getSelection();
+  const selectedRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  textArea.focus();
+  textArea.select();
+  textArea.setSelectionRange(0, textArea.value.length);
+
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {}
+
+  textArea.remove();
+  if (selection && selectedRange) {
+    selection.removeAllRanges();
+    selection.addRange(selectedRange);
+  }
+
+  return copied;
+}
+
+function setContactCopyButtonState(label) {
+  if (!elements.copyContactEmailButton) {
+    return;
+  }
+
+  elements.copyContactEmailButton.textContent = label;
+  window.setTimeout(() => {
+    if (elements.copyContactEmailButton) {
+      elements.copyContactEmailButton.textContent = "Copy";
+    }
+  }, 2000);
 }
 
 function loadDebugTimeOverride() {
@@ -7834,14 +7968,14 @@ function applyRetentionPolicy(referenceDate = getRetentionReferenceDate()) {
   const oooCutoffDate = getRetentionCutoffDate(policy.oooDays, referenceDate);
   const exceptionPartition = partitionRecordsByRetention(data.exceptions, oooCutoffDate, (slot) => slot.date || slot.startDate);
   data.exceptions = exceptionPartition.retained;
-  const globalOooPartition = partitionRecordsByRetention(data.holidays, oooCutoffDate, (holiday) => holiday.date);
+  const globalOooPartition = partitionRecordsByRetention(data.holidays, oooCutoffDate, getOooRetentionDate);
   data.holidays = globalOooPartition.retained;
   Object.values(data.regionalSettings || {}).forEach((settings) => {
     if (!settings || typeof settings !== "object") {
       return;
     }
 
-    const scopedOooPartition = partitionRecordsByRetention(settings.holidays, oooCutoffDate, (holiday) => holiday.date);
+    const scopedOooPartition = partitionRecordsByRetention(settings.holidays, oooCutoffDate, getOooRetentionDate);
     settings.holidays = scopedOooPartition.retained;
   });
 
@@ -7920,9 +8054,13 @@ function normalizeHolidayRecords(holidays) {
     holiday.type = isTimedOooRecord(holiday) ? OOO_TYPE_TIME : OOO_TYPE_ALL_DAY;
     if (holiday.type === OOO_TYPE_TIME) {
       normalizeForwardTimeFields(holiday, "12:00", "12:30");
+      delete holiday.endDate;
     } else {
       delete holiday.start;
       delete holiday.end;
+      if (!isValidDateInput(holiday.endDate || "") || holiday.endDate <= holiday.date) {
+        delete holiday.endDate;
+      }
     }
     delete holiday.allDay;
   });
@@ -7945,6 +8083,7 @@ function migrateGlobalAllUserHolidaysToRegions() {
       const alreadyExists = regionHolidays.some((existing) => (
         existing.userId === GLOBAL_HOLIDAY_USER_ID
           && existing.date === holiday.date
+          && getOooEndDate(existing) === getOooEndDate(holiday)
           && getOooType(existing) === getOooType(holiday)
           && (existing.start || "") === (holiday.start || "")
           && (existing.end || "") === (holiday.end || "")
@@ -8482,6 +8621,10 @@ function setDefaultDates() {
   if (elements.holidayDateInput) {
     elements.holidayDateInput.value ||= today;
   }
+  if (elements.holidayEndDateInput) {
+    elements.holidayEndDateInput.value ||= elements.holidayDateInput?.value || today;
+  }
+  updateHolidayDateRangeConstraints();
 
   if (elements.delegationGraphDateInput) {
     elements.delegationGraphDateInput.value ||= today;
@@ -8533,6 +8676,35 @@ function updateScheduleRangeConstraints() {
   }
 
   elements.scheduleEndDateInput.min = elements.scheduleStartDateInput.value || "";
+}
+
+function normalizeHolidayDateRangeInputs(changedField = "start") {
+  if (!elements.holidayDateInput || !elements.holidayEndDateInput) {
+    return;
+  }
+
+  const startDate = isValidDateInput(elements.holidayDateInput.value)
+    ? elements.holidayDateInput.value
+    : getEasternNow().date;
+  let endDate = isValidDateInput(elements.holidayEndDateInput.value)
+    ? elements.holidayEndDateInput.value
+    : startDate;
+
+  if (endDate < startDate) {
+    endDate = changedField === "end" ? startDate : elements.holidayDateInput.value;
+  }
+
+  elements.holidayDateInput.value = startDate;
+  elements.holidayEndDateInput.value = endDate;
+  updateHolidayDateRangeConstraints();
+}
+
+function updateHolidayDateRangeConstraints() {
+  if (!elements.holidayDateInput || !elements.holidayEndDateInput) {
+    return;
+  }
+
+  elements.holidayEndDateInput.min = elements.holidayDateInput.value || "";
 }
 
 function updateForwardTimeInputConstraints() {

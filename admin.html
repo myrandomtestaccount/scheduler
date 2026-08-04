@@ -6,10 +6,16 @@
     <title>SME Scheduler Admin</title>
     <script>
       (() => {
-        const themeKey = "smeScheduler.theme.v1";
+        const themeKey = "scheduler.theme.v1";
+        const legacyThemeKey = "smeScheduler.theme.v1";
+        const legacyTheme = localStorage.getItem(legacyThemeKey);
+        if (localStorage.getItem(themeKey) === null && legacyTheme !== null) {
+          localStorage.setItem(themeKey, legacyTheme);
+        }
+        localStorage.removeItem(legacyThemeKey);
         const savedTheme = localStorage.getItem(themeKey);
         const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
-        document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : savedTheme === "light" || savedTheme === "bright" ? "light" : prefersDark ? "dark" : "light";
+        document.documentElement.dataset.theme = savedTheme === "dark" || savedTheme === "light" ? savedTheme : prefersDark ? "dark" : "light";
       })();
     </script>
     <link rel="stylesheet" href="styles.css">
@@ -322,10 +328,16 @@
                 <option value="time">Timed break</option>
               </select>
             </label>
-            <label class="field">
-              <span>Date</span>
-              <input id="holidayDateInput" type="date" required>
-            </label>
+            <div id="holidayDateRangeFields" class="two-columns">
+              <label class="field">
+                <span id="holidayDateLabel">Start date</span>
+                <input id="holidayDateInput" type="date" required>
+              </label>
+              <label id="holidayEndDateField" class="field">
+                <span>End date</span>
+                <input id="holidayEndDateInput" type="date">
+              </label>
+            </div>
             <div id="holidayTimeFields" class="two-columns hidden">
               <label class="field">
                 <span id="holidayStartLabel">Start</span>

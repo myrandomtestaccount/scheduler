@@ -10,15 +10,15 @@ The same files work on macOS and Windows 11, so you can test on a Mac and copy t
 
 Open `admin.html` for admin tools.
 
-For shared state on one computer, launch the tiny local server instead:
+For shared state across browsers or computers on the same network, launch the tiny local server instead:
 
 ```bash
 node server.js
 ```
 
-Then open `http://localhost:4173`.
+On the server computer, open `http://localhost:4173`. Other people on the same network should open the LAN URL printed in the terminal, such as `http://192.168.1.25:4173`.
 
-On Windows, double-click `start-shared.bat` if Node.js is installed.
+On Windows, double-click `start-shared.bat` if Node.js is installed. If Windows Defender Firewall asks, allow Node.js on private networks.
 
 ## Test
 
@@ -39,7 +39,7 @@ npm run check
 - `index.html`: primary assignment page for delegators and regular users.
 - `admin.html`: admin-only setup page for team, schedule, coverage, delegation, incidents, and data maintenance.
 - Static mode: opening the HTML files directly stores data in browser `localStorage`.
-- Shared mode: `node server.js` serves the app at `http://localhost:4173` and stores shared state in a JSON file.
+- Shared mode: `node server.js` serves the app at `http://localhost:4173` and LAN URLs printed in the terminal, then stores shared state in a JSON file.
 - Windows launcher: `start-shared.bat` starts shared mode on Windows when Node.js is installed.
 - macOS launcher: `start-shared.command` starts shared mode on macOS.
 - Shared-state conflict handling: saves use optimistic locking, reload newer shared data when another browser saves first, and show a sync warning.
@@ -72,7 +72,7 @@ npm run check
 - Multiple shifts: the same user can have different shifts on different days.
 - OOO timed breaks: admins can add dated time windows that temporarily block availability.
 - Extra slots: admins can add dated extra availability windows outside normal schedules.
-- OOO: admins can mark one user or all users as unavailable for a full day, or add a timed break.
+- OOO: admins can mark one user or all users as unavailable for a full day, an all-day date range, or a timed break.
 - Schedule graph: admins can review schedules in day or week view.
 - All-region graph: the global admin day graph uses a padded 26-hour window from one hour before APAC-style evening coverage through one hour after Americas close.
 - Regional graph limits: each region graph shows its coverage window with one hour of padding before and after.
@@ -202,7 +202,7 @@ Admin sections:
 - `Shift presets`: define reusable shift names and times for the selected admin view. The generated region-hours preset can be up to 14 hours; regular user shifts remain capped at 12 hours.
 - `Systems / apps`: add systems, select one or more regions per system, define ServiceNow config items when ServiceNow mode is enabled, and assign/reorder primary SMEs from those selected regions.
 - `Incidents`: turn incident creation on/off, configure post-assignment redirects, and prepare ServiceNow or Teams settings.
-- `OOO`: add all-day OOO or timed breaks for an individual user, or choose `All users in <region>` for region-wide OOO.
+- `OOO`: add all-day OOO ranges or timed breaks for an individual user, or choose `All users in <region>` for region-wide OOO.
 - `Data maintenance`: set cleanup retention, run cleanup, export/import JSON files, and reset sample data.
 
 Incident templates support `{{assignee}}`, `{{assignee_mention}}`, `{{coverage}}`, `{{assigned_at}}`, `{{incident_url}}`, `{{servicenow_incident_description}}`, and `{{servicenow_incident_id}}`.

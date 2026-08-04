@@ -197,10 +197,6 @@ button:disabled {
   justify-content: space-between;
 }
 
-.hero-copy {
-  max-width: 58rem;
-}
-
 .hero h1,
 .panel h2,
 .panel h3 {
@@ -408,7 +404,6 @@ button:disabled {
 .button-row,
 .inline-form,
 .two-columns,
-.three-columns,
 .assignment-actions {
   display: flex;
   gap: 0.8rem;
@@ -682,8 +677,7 @@ button:disabled {
   padding: 0.9rem;
 }
 
-.two-columns,
-.three-columns {
+.two-columns {
   display: grid;
 }
 
@@ -691,8 +685,8 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.three-columns {
-  grid-template-columns: 1.3fr 1fr 1fr;
+#holidayDateRangeFields.single-date {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .field {
@@ -1255,24 +1249,6 @@ fieldset {
   color: var(--offline-ink);
 }
 
-.status-pill.delegation-active {
-  background: var(--success-soft);
-  border: 1px solid color-mix(in srgb, var(--success), transparent 68%);
-  color: var(--success);
-}
-
-.status-pill.delegation-upcoming {
-  background: var(--primary-soft);
-  border: 1px solid var(--primary-line);
-  color: var(--primary);
-}
-
-.status-pill.delegation-past {
-  background: var(--offline);
-  border: 1px solid var(--offline-line);
-  color: var(--offline-ink);
-}
-
 .stack-list {
   display: grid;
   gap: 0.6rem;
@@ -1317,19 +1293,6 @@ fieldset {
   padding: 1rem;
 }
 
-.slot-picker-row {
-  align-items: end;
-  display: grid;
-  gap: 0.6rem;
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.slot-picker-row .secondary-button {
-  min-height: 2.45rem;
-  padding: 0.55rem 0.85rem;
-  white-space: nowrap;
-}
-
 .delegation-slot-editor {
   border-color: var(--primary-line);
 }
@@ -1343,11 +1306,6 @@ fieldset {
 
 .compact-time-field {
   flex: initial;
-}
-
-.delegation-assignment-section {
-  display: grid;
-  gap: 0.65rem;
 }
 
 .delegation-assignment-board {
@@ -1519,14 +1477,6 @@ fieldset {
   background: var(--offline);
   border-color: var(--offline-line);
   border-left-color: var(--offline-ink);
-}
-
-.delegation-item.unassigned {
-  border-left: 4px solid var(--warning);
-}
-
-.delegation-item .item-actions {
-  align-items: center;
 }
 
 .team-add-form {
@@ -1966,7 +1916,6 @@ fieldset {
 }
 
 .schedule-form,
-.slot-form,
 .card-form {
   display: grid;
   gap: 0.8rem;
@@ -2104,16 +2053,6 @@ fieldset {
 .day-picker .checkbox-grid {
   gap: 0.6rem;
   grid-template-columns: repeat(auto-fit, minmax(5.6rem, 1fr));
-}
-
-.check-row {
-  align-items: center;
-  display: flex;
-  gap: 0.45rem;
-}
-
-.check-row input {
-  width: auto;
 }
 
 .day-chip {
@@ -3107,43 +3046,6 @@ fieldset {
   white-space: pre;
 }
 
-.timeline-block {
-  border-radius: 999px;
-  color: var(--on-primary);
-  font-size: 0.72rem;
-  font-weight: 900;
-  height: 1.5rem;
-  overflow: hidden;
-  padding: 0.22rem 0.45rem;
-  position: absolute;
-  text-overflow: ellipsis;
-  top: 2.2rem;
-  white-space: nowrap;
-}
-
-.timeline-block.schedule {
-  background: var(--primary);
-}
-
-.timeline-block.extra {
-  background: var(--extra);
-  top: 4rem;
-}
-
-.timeline-block.break {
-  background: var(--break);
-  top: 5.8rem;
-}
-
-.timeline-block.holiday {
-  background: repeating-linear-gradient(45deg, var(--danger), var(--danger) 8px, var(--danger-stripe) 8px, var(--danger-stripe) 16px);
-  height: 5.2rem;
-  left: 0.5rem !important;
-  right: 0.5rem;
-  top: 2.2rem;
-  width: auto !important;
-}
-
 .empty-state {
   border: 1px dashed var(--line);
   border-radius: 22px;
@@ -3155,7 +3057,6 @@ fieldset {
 @media (max-width: 960px) {
   .admin-grid,
   .two-columns,
-  .three-columns,
   .service-now-hidden-field-form {
     grid-template-columns: 1fr;
   }
@@ -3243,13 +3144,8 @@ fieldset {
     grid-template-columns: repeat(2, minmax(6.5rem, 1fr)) auto;
   }
 
-  .slot-picker-row,
   .delegation-slot-editor-form {
     grid-template-columns: 1fr;
-  }
-
-  .slot-picker-row .secondary-button {
-    justify-self: stretch;
   }
 
   .dashboard-open-button {
