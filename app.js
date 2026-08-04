@@ -6374,6 +6374,17 @@ function addHoliday(event) {
     return;
   }
 
+  if (oooType === OOO_TYPE_ALL_DAY) {
+    const conflict = getAllDayOooConflict(holidayTarget, startDate, endDate);
+    if (conflict) {
+      showGenericAlert(
+        "OOO already exists",
+        `${conflict.userName} already has all-day OOO on ${formatHolidayDate(conflict.date)}: ${formatOooRecordLabel(conflict.holiday)}.`
+      );
+      return;
+    }
+  }
+
   const holiday = {
     id: makeRecordId("holiday"),
     userId: holidayTarget.userId,
@@ -6509,6 +6520,82 @@ function getHolidayTargetList(target) {
   }
 
   return data.holidays;
+}
+
+function getAllDayOooConflict(target, startDate, endDate) {
+  const targetUserIds = getHolidayTargetUserIds(target);
+  if (targetUserIds.length === 0) {
+    return null;
+  }
+
+  const targetUserIdSet = new Set(targetUserIds);
+  return getAllDayOooConflictCandidates().find((candidate) => {
+    if (!dateRangesOverlap(startDate, endDate, candidate.holiday.date, getOooEndDate(candidate.holiday))) {
+      return false;
+    }
+
+    const overlappingUserId = candidate.userIds.find((userId) => targetUserIdSet.has(userId));
+    if (!overlappingUserId) {
+      return false;
+    }
+
+    candidate.userId = overlappingUserId;
+    candidate.userName = getUserFromReference(overlappingUserId)?.name || "This user";
+    candidate.date = getDateRangeOverlapStart(startDate, endDate, candidate.holiday.date, getOooEndDate(candidate.holiday));
+    return true;
+  }) || null;
+}
+
+function getAllDayOooConflictCandidates() {
+  const candidates = data.holidays
+    .filter(isAllDayOooRecord)
+    .map((holiday) => ({
+      holiday,
+      regionId: GLOBAL_REGION_SCOPE_ID,
+      userIds: getHolidayRecordUserIds(holiday, GLOBAL_REGION_SCOPE_ID)
+    }));
+
+  Object.entries(data.regionalSettings || {}).forEach(([regionId, settings]) => {
+    (settings?.holidays || [])
+      .filter(isAllDayOooRecord)
+      .forEach((holiday) => {
+        candidates.push({
+          holiday,
+          regionId,
+          userIds: getHolidayRecordUserIds(holiday, regionId)
+        });
+      });
+  });
+
+  return candidates.filter((candidate) => candidate.userIds.length > 0);
+}
+
+function getHolidayTargetUserIds(target) {
+  if (target.userId === GLOBAL_HOLIDAY_USER_ID) {
+    return getUsersForRegionScope(target.regionId).map((user) => user.id);
+  }
+
+  return data.users.some((user) => user.id === target.userId) ? [target.userId] : [];
+}
+
+function getHolidayRecordUserIds(holiday, regionId) {
+  if (holiday.userId === GLOBAL_HOLIDAY_USER_ID) {
+    return getUsersForRegionScope(regionId).map((user) => user.id);
+  }
+
+  return data.users.some((user) => user.id === holiday.userId) ? [holiday.userId] : [];
+}
+
+function dateRangesOverlap(leftStartDate, leftEndDate, rightStartDate, rightEndDate) {
+  return leftStartDate <= rightEndDate && rightStartDate <= leftEndDate;
+}
+
+function getDateRangeOverlapStart(leftStartDate, leftEndDate, rightStartDate, rightEndDate) {
+  if (!dateRangesOverlap(leftStartDate, leftEndDate, rightStartDate, rightEndDate)) {
+    return leftStartDate;
+  }
+
+  return leftStartDate > rightStartDate ? leftStartDate : rightStartDate;
 }
 
 function getHolidayUserName(holiday, regionId = selectedAdminRegionId) {

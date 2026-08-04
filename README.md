@@ -73,6 +73,7 @@ npm run check
 - OOO timed breaks: admins can add dated time windows that temporarily block availability.
 - Extra slots: admins can add dated extra availability windows outside normal schedules.
 - OOO: admins can mark one user or all users as unavailable for a full day, an all-day date range, or a timed break.
+- OOO duplicate protection: a user cannot have overlapping all-day OOO records for the same date.
 - Schedule graph: admins can review schedules in day or week view.
 - All-region graph: the global admin day graph uses a padded 26-hour window from one hour before APAC-style evening coverage through one hour after Americas close.
 - Regional graph limits: each region graph shows its coverage window with one hour of padding before and after.
