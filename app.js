@@ -1,15 +1,8 @@
 const STORAGE_NAMESPACE = "scheduler";
-const LEGACY_STORAGE_NAMESPACE = "smeScheduler";
 const STORAGE_KEY = `${STORAGE_NAMESPACE}.data.v1`;
 const DEBUG_TIME_STORAGE_KEY = `${STORAGE_NAMESPACE}.debugTime.v1`;
 const THEME_STORAGE_KEY = `${STORAGE_NAMESPACE}.theme.v1`;
 const DISPLAY_TIMEZONE_STORAGE_KEY = `${STORAGE_NAMESPACE}.displayTimezone.v1`;
-const LEGACY_STORAGE_KEYS = new Map([
-  [STORAGE_KEY, `${LEGACY_STORAGE_NAMESPACE}.data.v1`],
-  [DEBUG_TIME_STORAGE_KEY, `${LEGACY_STORAGE_NAMESPACE}.debugTime.v1`],
-  [THEME_STORAGE_KEY, `${LEGACY_STORAGE_NAMESPACE}.theme.v1`],
-  [DISPLAY_TIMEZONE_STORAGE_KEY, `${LEGACY_STORAGE_NAMESPACE}.displayTimezone.v1`]
-]);
 const SHARED_STATE_ENDPOINT = "/api/state";
 const SHARED_STATE_REFRESH_MS = 10000;
 const THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
@@ -546,8 +539,6 @@ const defaultData = {
   holidays: [],
   assignmentLog: []
 };
-
-migrateLegacyStorageKeys();
 
 let data = loadData();
 let lastPersistedData = cloneData(data);
@@ -7440,22 +7431,6 @@ function resetData() {
     clearSelectedAssignee();
     completeAdminSave("Sample data restored.", "data");
   });
-}
-
-function migrateLegacyStorageKeys() {
-  try {
-    LEGACY_STORAGE_KEYS.forEach((legacyKey, currentKey) => {
-      const legacyValue = localStorage.getItem(legacyKey);
-      if (legacyValue === null) {
-        return;
-      }
-
-      if (localStorage.getItem(currentKey) === null) {
-        localStorage.setItem(currentKey, legacyValue);
-      }
-      localStorage.removeItem(legacyKey);
-    });
-  } catch {}
 }
 
 function loadData() {

@@ -7,12 +7,6 @@
     <script>
       (() => {
         const themeKey = "scheduler.theme.v1";
-        const legacyThemeKey = "smeScheduler.theme.v1";
-        const legacyTheme = localStorage.getItem(legacyThemeKey);
-        if (localStorage.getItem(themeKey) === null && legacyTheme !== null) {
-          localStorage.setItem(themeKey, legacyTheme);
-        }
-        localStorage.removeItem(legacyThemeKey);
         const savedTheme = localStorage.getItem(themeKey);
         const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
         document.documentElement.dataset.theme = savedTheme === "dark" || savedTheme === "light" ? savedTheme : prefersDark ? "dark" : "light";
