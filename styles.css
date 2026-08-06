@@ -2376,6 +2376,73 @@ fieldset {
   max-width: 38rem;
 }
 
+.onboarding-overlay {
+  background:
+    radial-gradient(circle at 50% 28%, color-mix(in srgb, var(--primary), transparent 78%), transparent 35rem),
+    rgba(4, 18, 28, 0.58);
+  overflow: auto;
+}
+
+.onboarding-card {
+  border-color: var(--primary-line);
+  max-height: calc(100vh - 2.5rem);
+  max-width: 48rem;
+  overflow: auto;
+  width: min(100%, 48rem);
+}
+
+.onboarding-body,
+.onboarding-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.onboarding-member-list {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+}
+
+.onboarding-option-row {
+  align-items: center;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+}
+
+.onboarding-option-row p {
+  margin: 0.2rem 0 0;
+}
+
+.onboarding-region-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.onboarding-region-row {
+  align-items: end;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: auto minmax(12rem, 1fr) minmax(8rem, 0.55fr) minmax(8rem, 0.55fr);
+  padding: 0.75rem;
+}
+
+.onboarding-card textarea {
+  max-height: 10rem;
+  resize: vertical;
+}
+
+.onboarding-use-region {
+  min-height: 3.25rem;
+}
+
 .speed-bump-copy {
   display: grid;
   gap: 0.55rem;
@@ -3100,6 +3167,7 @@ fieldset {
   }
 
   .region-row,
+  .onboarding-region-row,
   .shift-row-fields {
     grid-template-columns: 1fr;
   }

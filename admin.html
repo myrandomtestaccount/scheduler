@@ -89,6 +89,13 @@
         </div>
 
         <section id="usersTab" class="tab-panel" data-lockable-admin-tab="users">
+          <form id="teamSettingsForm" class="inline-form team-settings-form">
+            <label class="field">
+              <span>Team name</span>
+              <input id="teamNameInput" type="text" placeholder="Enter team name" autocomplete="organization">
+            </label>
+            <button class="primary-button" type="submit">Save team name</button>
+          </form>
           <form id="addUserForm" class="inline-form team-add-form">
             <label class="field">
               <span>Add new team member</span>
@@ -516,7 +523,7 @@
                 Import JSON file
                 <input id="importInput" type="file" accept="application/json">
               </label>
-              <button id="resetButton" class="danger-button" type="button">Reset sample data</button>
+              <button id="resetButton" class="danger-button" type="button">Reset setup</button>
             </div>
           </section>
           <textarea id="dataPreview" readonly aria-label="Current scheduler JSON preview"></textarea>
@@ -630,7 +637,7 @@
           <ul class="backup-risk-list">
             <li>Cleanup can remove old history based on the retention policy.</li>
             <li>Importing a file can overwrite the current scheduler data.</li>
-            <li>Resetting sample data can remove the setup you are using now.</li>
+            <li>Resetting setup removes the current scheduler data and shows onboarding again.</li>
           </ul>
         </div>
         <div class="speed-bump-actions">

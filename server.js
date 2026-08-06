@@ -14,11 +14,13 @@ const configDir = path.resolve(
     || path.join(os.homedir(), "Documents", "scheduler-config")
 );
 const stateFile = path.join(configDir, "scheduler-state.json");
+const logFile = path.join(configDir, "scheduler.log");
 const backupDir = path.join(configDir, "backups");
 const BACKUP_TIME_ZONE = "America/New_York";
 const DEFAULT_BACKUP_SNAPSHOT_RETENTION_DAYS = 90;
 const BACKUP_FILENAME_PATTERN = /^scheduler-state-(\d{8})_(\d+)\.json$/;
 let stateLock = Promise.resolve();
+let logWriteQueue = Promise.resolve();
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -36,15 +38,17 @@ const server = http.createServer(async (request, response) => {
 
     await serveStaticFile(url.pathname, request, response);
   } catch (error) {
+    logError(`${request.method} ${request.url || ""} failed: ${error.stack || error.message}`);
     sendJson(response, 500, { error: "server_error", message: error.message });
   }
 });
 
 server.listen(port, host, () => {
-  console.log("SME Scheduler running:");
-  getServerUrls(host, port).forEach((url) => console.log(`  ${url}`));
-  console.log(`Shared config: ${stateFile}`);
-  console.log(`JSON snapshots: ${backupDir}`);
+  logInfo("SME Scheduler running:");
+  getServerUrls(host, port).forEach((url) => logInfo(`  ${url}`));
+  logInfo(`Shared config: ${stateFile}`);
+  logInfo(`JSON snapshots: ${backupDir}`);
+  logInfo(`Log file: ${logFile}`);
 });
 
 async function handleStateRequest(request, response) {
@@ -85,6 +89,10 @@ async function handleStateRequest(request, response) {
     }
 
     const saved = await writeStateFile(body.data);
+    logInfo(`Saved shared config: ${stateFile}`);
+    if (saved.backupPath) {
+      logInfo(`Created JSON snapshot: ${saved.backupPath}`);
+    }
     sendJson(response, 200, {
       revision: saved.revision,
       data: saved.data,
@@ -155,7 +163,7 @@ async function writeStateFile(data) {
   try {
     await cleanupBackupSnapshots(getBackupSnapshotRetentionDays(data));
   } catch (error) {
-    console.warn(`Could not clean JSON snapshots: ${error.message}`);
+    logWarn(`Could not clean JSON snapshots: ${error.message}`);
   }
   return {
     revision: hashText(text),
@@ -289,6 +297,30 @@ function validateSchedulerData(candidate) {
     if (!system.id || !system.name || !Array.isArray(system.primaryUserIds)) {
       throw new Error("Every system needs id, name, and primaryUserIds.");
     }
+  });
+}
+
+function logInfo(message) {
+  console.log(message);
+  appendLogLine("INFO", message);
+}
+
+function logWarn(message) {
+  console.warn(message);
+  appendLogLine("WARN", message);
+}
+
+function logError(message) {
+  console.error(message);
+  appendLogLine("ERROR", message);
+}
+
+async function appendLogLine(level, message) {
+  logWriteQueue = logWriteQueue.then(async () => {
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.appendFile(logFile, `${new Date().toISOString()} ${level} ${message}\n`, "utf8");
+  }).catch((error) => {
+    console.warn(`Could not write scheduler log: ${error.message}`);
   });
 }
 

@@ -43,7 +43,8 @@ npm run check
 - Windows launcher: `start-shared.bat` starts shared mode on Windows when Node.js is installed.
 - macOS launcher: `start-shared.command` starts shared mode on macOS.
 - Shared-state conflict handling: saves use optimistic locking, reload newer shared data when another browser saves first, and show a sync warning.
-- Data maintenance: admins can set retention, run cleanup, export/import JSON, preview data, and reset sample data.
+- First-run setup: missing or empty scheduler data opens onboarding instead of loading sample users or regions.
+- Data maintenance: admins can set retention, run cleanup, export/import JSON, preview data, and reset to onboarding.
 
 ### Main Assignment Page
 
@@ -98,11 +99,11 @@ npm run check
 
 ### Admin Team and Coverage Setup
 
-- Team management: admins can add and remove team members.
+- Team management: admins can edit the team name and add/remove team members.
 - Team region breakdown: the global Team view groups users by region; each region has its own independent ranking, and a selected region admin view shows only that region’s users.
 - Protected removal: removing users uses a confirmation flow that explains impact.
 - Regions toggle: admins can turn region separation on or off.
-- Region list: admins can create and remove region labels such as Americas, EMEA, and APAC.
+- Region list: admins can create and remove region labels such as AMER, EMEA, and APAC.
 - Region hours: each region stores its own Eastern Time operating window. Windows can cross midnight, but cannot exceed 14 hours.
 - User-region mapping: users can belong to one or more regions.
 - Regional admin view: when regions exist, overview tabs can switch between `All regions` and each region page; Rules is always edited on a specific region.
@@ -171,6 +172,12 @@ Shared mode also writes dated JSON snapshots before overwriting existing data:
 ~/Documents/scheduler-config/backups/scheduler-state-MMDDYYYY_01.json
 ```
 
+The server log is saved in the same config folder:
+
+```text
+~/Documents/scheduler-config/scheduler.log
+```
+
 Retention cleanup removes old ticket history, OOO/break records, and delegation records while keeping team, schedules, regions, systems, rules, shifts, and current queue positions.
 
 You can choose a different shared folder:
@@ -204,7 +211,7 @@ Admin sections:
 - `Systems / apps`: add systems, select one or more regions per system, define ServiceNow config items when ServiceNow mode is enabled, and assign/reorder primary SMEs from those selected regions.
 - `Incidents`: turn incident creation on/off, configure post-assignment redirects, and prepare ServiceNow or Teams settings.
 - `OOO`: add all-day OOO ranges or timed breaks for an individual user, or choose `All users in <region>` for region-wide OOO.
-- `Data maintenance`: set cleanup retention, run cleanup, export/import JSON files, and reset sample data.
+- `Data maintenance`: set cleanup retention, run cleanup, export/import JSON files, and reset to onboarding.
 
 Incident templates support `{{assignee}}`, `{{assignee_mention}}`, `{{coverage}}`, `{{assigned_at}}`, `{{incident_url}}`, `{{servicenow_incident_description}}`, and `{{servicenow_incident_id}}`.
 

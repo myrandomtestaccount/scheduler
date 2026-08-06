@@ -134,8 +134,8 @@ const AVAILABLE_TIMEZONES = [
 ];
 
 const DEFAULT_REGIONS = [
-  { id: "amer", name: "Americas", coverageStart: "07:00", coverageEnd: "19:00" },
-  { id: "emea", name: "EMEA", coverageStart: "07:00", coverageEnd: "19:00" },
+  { id: "amer", name: "AMER", coverageStart: "07:00", coverageEnd: "19:00" },
+  { id: "emea", name: "EMEA", coverageStart: "01:00", coverageEnd: "13:00" },
   { id: "apac", name: "APAC", coverageStart: "19:00", coverageEnd: "07:00" }
 ];
 
@@ -144,7 +144,7 @@ function getDisplayTimezones() {
 }
 
 function hasRegionalScopes() {
-  return data?.regionsEnabled !== false && Array.isArray(data?.regions) && data.regions.length > 0;
+  return data?.regionsEnabled === true && Array.isArray(data?.regions) && data.regions.length > 0;
 }
 
 function normalizeRegionScopeId(regionId) {
@@ -487,58 +487,35 @@ const ASSIGNMENT_RULE_LABELS = {
   lastTicketToday: "Rotation: longest time since last assignment"
 };
 
-const defaultData = {
-  users: [
-    {
-      id: "alice",
-      name: "Alice",
-      regionIds: ["amer"],
-      schedules: [
-        { id: "alice-regular", shiftType: "regular", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "09:00", end: "17:00" }
-      ]
+function createEmptyData(overrides = {}) {
+  return {
+    setup: {
+      completed: false,
+      teamName: ""
     },
-    {
-      id: "ben",
-      name: "Ben",
-      regionIds: ["emea"],
-      schedules: [
-        { id: "ben-early", shiftType: "early", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "07:00", end: "15:00" }
-      ]
+    users: [],
+    systems: [],
+    queues: {},
+    queueBaselines: {
+      global: {},
+      regional: {}
     },
-    {
-      id: "casey",
-      name: "Casey",
-      regionIds: ["apac"],
-      schedules: [
-        { id: "casey-late", shiftType: "late", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], start: "11:00", end: "19:00" }
-      ]
-    }
-  ],
-  systems: [
-    { id: "external-system", name: "External System", primaryUserIds: ["alice", "ben", "casey"], serviceNowConfigItem: "External System" },
-    { id: "internal-api", name: "Internal API", primaryUserIds: ["casey", "alice"], serviceNowConfigItem: "Internal API" }
-  ],
-  queues: {
-    "external-system": 0,
-    "internal-api": 0
-  },
-  queueBaselines: {
-    global: {},
-    regional: {}
-  },
-  shiftTemplates: DEFAULT_SHIFT_TEMPLATES,
-  assignmentRules: DEFAULT_ASSIGNMENT_RULES,
-  displayTimezones: DEFAULT_DISPLAY_TIMEZONES,
-  incidentConfig: DEFAULT_INCIDENT_CONFIG,
-  retentionPolicy: DEFAULT_RETENTION_POLICY,
-  regions: DEFAULT_REGIONS,
-  regionalSettings: {},
-  delegationSlots: [],
-  delegations: [],
-  exceptions: [],
-  holidays: [],
-  assignmentLog: []
-};
+    shiftTemplates: cloneData(DEFAULT_SHIFT_TEMPLATES),
+    assignmentRules: cloneData(DEFAULT_ASSIGNMENT_RULES),
+    displayTimezones: cloneData(DEFAULT_DISPLAY_TIMEZONES),
+    incidentConfig: cloneData(DEFAULT_INCIDENT_CONFIG),
+    retentionPolicy: cloneData(DEFAULT_RETENTION_POLICY),
+    regionsEnabled: false,
+    regions: [],
+    regionalSettings: {},
+    delegationSlots: [],
+    delegations: [],
+    exceptions: [],
+    holidays: [],
+    assignmentLog: [],
+    ...overrides
+  };
+}
 
 let data = loadData();
 let lastPersistedData = cloneData(data);
@@ -582,8 +559,22 @@ const ADMIN_TABS_WITH_DRAFT_SAVE = new Set(["rules", "shifts", "incidents"]);
 const unlockedAdminTabs = new Set();
 let saveToastTimer = null;
 let activeAdminTabId = "schedules";
+let onboardingRegionDraft = getDefaultOnboardingRegionDraft();
 
 const elements = {
+  onboardingModal: null,
+  onboardingForm: null,
+  onboardingTeamNameInput: null,
+  onboardingRegionsEnabledInput: null,
+  onboardingRegionsEnabledLabel: null,
+  onboardingRegionsPanel: null,
+  onboardingRegionList: null,
+  onboardingRegionalMembersList: null,
+  onboardingGlobalMembersField: null,
+  onboardingGlobalMembersInput: null,
+  onboardingCoverageInput: null,
+  onboardingQueueModelSelect: null,
+  onboardingSubmitButton: null,
   displayTimezoneSelect: document.querySelector("#displayTimezoneSelect"),
   assignmentQueueTitle: document.querySelector("#assignmentQueueTitle"),
   debugDateInput: document.querySelector("#debugDateInput"),
@@ -654,6 +645,8 @@ const elements = {
   queueDashboardList: document.querySelector("#queueDashboardList"),
   toggleRecentAssignmentsButton: document.querySelector("#toggleRecentAssignmentsButton"),
   assignmentLog: document.querySelector("#assignmentLog"),
+  teamSettingsForm: document.querySelector("#teamSettingsForm"),
+  teamNameInput: document.querySelector("#teamNameInput"),
   addUserForm: document.querySelector("#addUserForm"),
   userNameInput: document.querySelector("#userNameInput"),
   usersScopeMeta: document.querySelector("#usersScopeMeta"),
@@ -787,8 +780,10 @@ const elements = {
 applyTheme(loadTheme());
 
 document.addEventListener("DOMContentLoaded", async () => {
+  ensureOnboardingElements();
   bindEvents();
   renderDayCheckboxes();
+  renderOnboardingRegionRows();
   await initializeSharedState();
   render();
   window.setInterval(renderClockAndAssignment, 30000);
@@ -856,9 +851,15 @@ function bindEvents() {
   on(elements.resetDebugTimeButton, "click", resetDebugTimeOverride);
   on(elements.toggleQueueDashboardButton, "click", toggleQueueDashboard);
   on(elements.toggleRecentAssignmentsButton, "click", toggleRecentAssignments);
+  on(elements.teamSettingsForm, "submit", saveTeamSettings);
   on(elements.addUserForm, "submit", addUser);
   on(elements.addRegionForm, "submit", addRegion);
   on(elements.regionsEnabledInput, "change", toggleRegionsEnabled);
+  on(elements.onboardingForm, "submit", submitOnboarding);
+  on(elements.onboardingRegionsEnabledInput, "change", renderOnboardingFormMode);
+  on(elements.onboardingRegionList, "input", updateOnboardingRegionDraft);
+  on(elements.onboardingRegionList, "change", updateOnboardingRegionDraft);
+  on(elements.onboardingRegionalMembersList, "input", updateOnboardingMembersDraft);
   on(elements.cancelRemoveUserButton, "click", closeRemoveUserModal);
   on(elements.confirmRemoveUserButton, "click", confirmRemoveUser);
   on(elements.removeUserModal, "click", (event) => {
@@ -1102,6 +1103,8 @@ function activateTab(tabName) {
 function render() {
   normalizeData();
   setDefaultDates();
+  renderTeamBrand();
+  renderOnboarding();
   initializeAdminTimeInputs();
   renderRegionScopeControls();
   renderSystemSelect();
@@ -1113,6 +1116,7 @@ function render() {
   renderShifts();
   renderShiftAddForm();
   renderRegions();
+  renderTeamSettings();
   renderUsers();
   renderSystems();
   renderHolidayFormMode();
@@ -1128,6 +1132,429 @@ function render() {
   renderDisplayTimezoneSelect();
   renderClockAndAssignment();
   renderAdminLocks();
+}
+
+function renderTeamBrand() {
+  const teamName = String(data?.setup?.teamName || "").trim();
+  const appName = teamName ? `${teamName} SME Scheduler` : "SME Scheduler";
+  document.querySelectorAll(".logo-wordmark").forEach((wordmark) => {
+    wordmark.textContent = appName;
+  });
+  document.title = document.title.includes("Admin") ? `${appName} Admin` : appName;
+}
+
+function renderTeamSettings() {
+  if (!elements.teamNameInput || document.activeElement === elements.teamNameInput) {
+    return;
+  }
+
+  elements.teamNameInput.value = String(data?.setup?.teamName || "").trim();
+}
+
+function saveTeamSettings(event) {
+  event.preventDefault();
+  data.setup = data.setup && typeof data.setup === "object" ? data.setup : {};
+  data.setup.teamName = String(elements.teamNameInput?.value || "").trim();
+  completeAdminSave("Team name saved.", "users");
+}
+
+function ensureOnboardingElements() {
+  const existingModal = document.querySelector("#onboardingModal");
+  if (existingModal) {
+    assignOnboardingElements(existingModal);
+    return;
+  }
+
+  const modal = document.createElement("div");
+  modal.id = "onboardingModal";
+  modal.className = "speed-bump-overlay onboarding-overlay hidden";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-hidden", "true");
+  modal.setAttribute("aria-labelledby", "onboardingTitle");
+  modal.setAttribute("aria-describedby", "onboardingDescription");
+  modal.innerHTML = `
+    <form id="onboardingForm" class="speed-bump-card onboarding-card">
+      <div class="speed-bump-copy">
+        <p class="eyebrow">Welcome</p>
+        <h2 id="onboardingTitle">Set up your scheduler</h2>
+        <p id="onboardingDescription" class="speed-bump-impact">Start with the basics. Team members, regions, schedules, coverage, queue rules, OOO, and incidents can all be updated later in Admin.</p>
+      </div>
+
+      <div class="onboarding-body">
+        <label class="field">
+          <span>Team name</span>
+          <input id="onboardingTeamNameInput" type="text" placeholder="Example: Payments Support" autocomplete="organization" required>
+        </label>
+
+        <div class="onboarding-option-row">
+          <div>
+            <span class="item-title">Use regions</span>
+            <p class="meta">Start from AMER, EMEA, and APAC, or switch this off for one global team.</p>
+          </div>
+          <label class="toggle-switch">
+            <input id="onboardingRegionsEnabledInput" type="checkbox" checked>
+            <span class="toggle-slider" aria-hidden="true"></span>
+            <span id="onboardingRegionsEnabledLabel">Yes</span>
+          </label>
+        </div>
+
+        <section id="onboardingRegionsPanel" class="onboarding-section">
+          <div>
+            <h3>Regions</h3>
+            <p class="meta">Edit the names and region-hour limits now; detailed shifts can be added later.</p>
+          </div>
+          <div id="onboardingRegionList" class="onboarding-region-list"></div>
+          <div>
+            <h3>Team by region</h3>
+            <p class="meta">Enter one team member per line. The order becomes that region’s ranking.</p>
+          </div>
+          <div id="onboardingRegionalMembersList" class="onboarding-member-list"></div>
+        </section>
+
+        <label id="onboardingGlobalMembersField" class="field hidden">
+          <span>Team members</span>
+          <textarea id="onboardingGlobalMembersInput" rows="6" placeholder="One team member per line"></textarea>
+        </label>
+
+        <label class="field">
+          <span>Coverage queues / apps</span>
+          <textarea id="onboardingCoverageInput" rows="6" placeholder="One coverage queue or app per line" required></textarea>
+        </label>
+
+        <label class="field">
+          <span>Queue model</span>
+          <select id="onboardingQueueModelSelect">
+            ${ASSIGNMENT_RULE_PRESETS.map((preset) => `<option value="${escapeHtml(preset.id)}" ${preset.id === SHIFT_ORDER_PRESET_ID ? "selected" : ""}>${escapeHtml(preset.name)}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+
+      <div class="speed-bump-actions">
+        <button id="onboardingSubmitButton" class="primary-button" type="submit">Create scheduler</button>
+      </div>
+    </form>
+  `;
+  document.body.append(modal);
+  assignOnboardingElements(modal);
+}
+
+function assignOnboardingElements(modal) {
+  elements.onboardingModal = modal;
+  elements.onboardingForm = modal.querySelector("#onboardingForm");
+  elements.onboardingTeamNameInput = modal.querySelector("#onboardingTeamNameInput");
+  elements.onboardingRegionsEnabledInput = modal.querySelector("#onboardingRegionsEnabledInput");
+  elements.onboardingRegionsEnabledLabel = modal.querySelector("#onboardingRegionsEnabledLabel");
+  elements.onboardingRegionsPanel = modal.querySelector("#onboardingRegionsPanel");
+  elements.onboardingRegionList = modal.querySelector("#onboardingRegionList");
+  elements.onboardingRegionalMembersList = modal.querySelector("#onboardingRegionalMembersList");
+  elements.onboardingGlobalMembersField = modal.querySelector("#onboardingGlobalMembersField");
+  elements.onboardingGlobalMembersInput = modal.querySelector("#onboardingGlobalMembersInput");
+  elements.onboardingCoverageInput = modal.querySelector("#onboardingCoverageInput");
+  elements.onboardingQueueModelSelect = modal.querySelector("#onboardingQueueModelSelect");
+  elements.onboardingSubmitButton = modal.querySelector("#onboardingSubmitButton");
+}
+
+function getDefaultOnboardingRegionDraft() {
+  return cloneData(DEFAULT_REGIONS).map((region) => ({
+    ...region,
+    enabled: true,
+    members: ""
+  }));
+}
+
+function resetOnboardingForm() {
+  onboardingRegionDraft = getDefaultOnboardingRegionDraft();
+  elements.onboardingForm?.reset();
+  if (elements.onboardingRegionsEnabledInput) {
+    elements.onboardingRegionsEnabledInput.checked = true;
+  }
+  renderOnboardingRegionRows();
+}
+
+function isOnboardingComplete() {
+  return data?.setup?.completed === true
+    || (Array.isArray(data?.users) && data.users.length > 0)
+    || (Array.isArray(data?.systems) && data.systems.length > 0);
+}
+
+function renderOnboarding() {
+  if (!elements.onboardingModal) {
+    return;
+  }
+
+  const showOnboarding = !isOnboardingComplete();
+  elements.onboardingModal.classList.toggle("hidden", !showOnboarding);
+  elements.onboardingModal.setAttribute("aria-hidden", showOnboarding ? "false" : "true");
+  if (!showOnboarding) {
+    return;
+  }
+
+  renderOnboardingFormMode();
+  window.setTimeout(() => {
+    if (!elements.onboardingModal.classList.contains("hidden")) {
+      elements.onboardingTeamNameInput?.focus();
+    }
+  }, 0);
+}
+
+function renderOnboardingRegionRows() {
+  if (!elements.onboardingRegionList) {
+    return;
+  }
+
+  elements.onboardingRegionList.innerHTML = onboardingRegionDraft.map((region, index) => `
+    <div class="onboarding-region-row" data-onboarding-region-index="${index}">
+      <label class="region-chip onboarding-use-region">
+        <input type="checkbox" data-onboarding-region-field="enabled" ${region.enabled ? "checked" : ""}>
+        <span>Use</span>
+      </label>
+      <label class="field mini-field">
+        <span>Name</span>
+        <input type="text" value="${escapeHtml(region.name)}" data-onboarding-region-field="name">
+      </label>
+      <label class="field mini-field">
+        <span>Start ET</span>
+        <input type="time" value="${escapeHtml(region.coverageStart)}" data-onboarding-region-field="coverageStart">
+      </label>
+      <label class="field mini-field">
+        <span>End ET</span>
+        <input type="time" value="${escapeHtml(region.coverageEnd)}" data-onboarding-region-field="coverageEnd">
+      </label>
+    </div>
+  `).join("");
+  renderOnboardingMemberFields();
+  renderOnboardingFormMode();
+}
+
+function renderOnboardingFormMode() {
+  const regionsEnabled = Boolean(elements.onboardingRegionsEnabledInput?.checked);
+  if (elements.onboardingRegionsEnabledLabel) {
+    elements.onboardingRegionsEnabledLabel.textContent = regionsEnabled ? "Yes" : "No";
+  }
+  elements.onboardingRegionsPanel?.classList.toggle("hidden", !regionsEnabled);
+  elements.onboardingGlobalMembersField?.classList.toggle("hidden", regionsEnabled);
+  if (regionsEnabled) {
+    renderOnboardingMemberFields();
+  }
+}
+
+function renderOnboardingMemberFields() {
+  if (!elements.onboardingRegionalMembersList) {
+    return;
+  }
+
+  const enabledRegions = onboardingRegionDraft.filter((region) => region.enabled);
+  elements.onboardingRegionalMembersList.innerHTML = enabledRegions.map((region, index) => `
+    <label class="field">
+      <span>${escapeHtml(String(region.name || `Region ${index + 1}`).trim())} members</span>
+      <textarea rows="6" data-onboarding-region-members="${escapeHtml(region.id)}" placeholder="One team member per line">${escapeHtml(region.members || "")}</textarea>
+    </label>
+  `).join("") || emptyState("Select at least one region.");
+}
+
+function updateOnboardingRegionDraft(event) {
+  const row = event.target.closest?.("[data-onboarding-region-index]");
+  if (!row) {
+    return;
+  }
+
+  const index = Number.parseInt(row.dataset.onboardingRegionIndex, 10);
+  const field = event.target.dataset.onboardingRegionField;
+  const region = onboardingRegionDraft[index];
+  if (!region || !field) {
+    return;
+  }
+
+  region[field] = field === "enabled" ? event.target.checked : event.target.value;
+  renderOnboardingMemberFields();
+}
+
+function updateOnboardingMembersDraft(event) {
+  const regionId = event.target.dataset.onboardingRegionMembers;
+  const region = onboardingRegionDraft.find((item) => item.id === regionId);
+  if (region) {
+    region.members = event.target.value;
+  }
+}
+
+function submitOnboarding(event) {
+  event.preventDefault();
+  const nextData = buildOnboardingDataFromForm();
+  if (!nextData) {
+    return;
+  }
+
+  data = nextData;
+  clearSelectedAssignee();
+  selectedAssignmentRegionId = GLOBAL_REGION_SCOPE_ID;
+  selectedAdminRegionId = GLOBAL_REGION_SCOPE_ID;
+  completeDataSave("Scheduler setup saved.", { showToast: true });
+}
+
+function buildOnboardingDataFromForm() {
+  const teamName = String(elements.onboardingTeamNameInput?.value || "").trim();
+  if (!teamName) {
+    showGenericAlert("Team name required", "Add a team name before creating the scheduler.");
+    return null;
+  }
+
+  const regionsEnabled = Boolean(elements.onboardingRegionsEnabledInput?.checked);
+  const regions = regionsEnabled ? getOnboardingRegions() : [];
+  if (regionsEnabled && !regions) {
+    return null;
+  }
+  if (regionsEnabled && regions.length === 0) {
+    showGenericAlert("Region required", "Select at least one region, or turn regions off for one global team.");
+    return null;
+  }
+
+  const { users, userIdsByRegionId } = buildOnboardingUsers(regionsEnabled, regions);
+  if (users.length === 0) {
+    showGenericAlert("Team members required", "Add at least one team member before creating the scheduler.");
+    return null;
+  }
+
+  const coverageNames = parseOnboardingLines(elements.onboardingCoverageInput?.value);
+  if (coverageNames.length === 0) {
+    showGenericAlert("Coverage required", "Add at least one coverage queue or app before creating the scheduler.");
+    return null;
+  }
+
+  const assignmentRules = {
+    preset: getAssignmentRulePreset(elements.onboardingQueueModelSelect?.value).id
+  };
+  const systemIds = [];
+  const regionIds = regions.map((region) => region.id);
+  const systems = coverageNames.map((name) => {
+    const id = makeId(name, systemIds);
+    systemIds.push(id);
+    return {
+      id,
+      name,
+      primaryUserIds: users.map((user) => user.id),
+      serviceNowConfigItem: name,
+      ...(regionsEnabled ? { regionIds: cloneData(regionIds) } : {})
+    };
+  });
+  const queues = Object.fromEntries(systems.map((system) => [system.id, 0]));
+  const regionalSettings = regionsEnabled
+    ? Object.fromEntries(regions.map((region) => [
+        region.id,
+        {
+          assignmentRules: cloneData(assignmentRules),
+          shiftTemplates: [{
+            id: `${region.id}-coverage`,
+            name: `${region.name} region hours`,
+            start: region.coverageStart,
+            end: region.coverageEnd
+          }],
+          teamOrderIds: cloneData(userIdsByRegionId[region.id] || []),
+          queues: cloneData(queues),
+          holidays: []
+        }
+      ]))
+    : {};
+
+  return createEmptyData({
+    setup: {
+      completed: true,
+      teamName,
+      completedAt: new Date().toISOString()
+    },
+    users,
+    systems,
+    queues,
+    assignmentRules,
+    regionsEnabled,
+    regions,
+    regionalSettings
+  });
+}
+
+function getOnboardingRegions() {
+  const regionIds = [];
+  const regionNames = new Set();
+  const invalidRegions = [];
+  const maxRegionHours = Math.round(MAX_REGION_COVERAGE_MINUTES / 60);
+  const regions = onboardingRegionDraft
+    .filter((region) => region.enabled)
+    .map((region) => {
+      const name = String(region.name || "").trim();
+      const normalizedName = name.toLowerCase();
+      const coverageStart = String(region.coverageStart || "").trim();
+      const coverageEnd = String(region.coverageEnd || "").trim();
+      if (!name || regionNames.has(normalizedName) || !isValidRegionCoverageTimeRange(coverageStart, coverageEnd)) {
+        invalidRegions.push(name || "Unnamed region");
+        return null;
+      }
+
+      regionNames.add(normalizedName);
+      const id = makeId(name, regionIds);
+      regionIds.push(id);
+      return { id, name, coverageStart, coverageEnd };
+    })
+    .filter(Boolean);
+
+  if (invalidRegions.length > 0) {
+    showGenericAlert("Check region setup", `Each selected region needs a unique name and valid region hours of ${maxRegionHours} hours or less.`);
+    return null;
+  }
+
+  return regions;
+}
+
+function buildOnboardingUsers(regionsEnabled, regions) {
+  const users = [];
+  const userIds = [];
+  const usersByName = new Map();
+  const userIdsByRegionId = Object.fromEntries(regions.map((region) => [region.id, []]));
+  const enabledDrafts = onboardingRegionDraft.filter((draft) => draft.enabled);
+  const regionIdByDraftId = new Map(enabledDrafts.map((draft, index) => [draft.id, regions[index]?.id]).filter(([, regionId]) => regionId));
+
+  const addUser = (name, regionId = GLOBAL_REGION_SCOPE_ID) => {
+    const normalizedName = name.toLowerCase();
+    let user = usersByName.get(normalizedName);
+    if (!user) {
+      const id = makeId(name, userIds);
+      userIds.push(id);
+      user = {
+        id,
+        name,
+        regionIds: [],
+        schedules: []
+      };
+      users.push(user);
+      usersByName.set(normalizedName, user);
+    }
+
+    if (regionId && !user.regionIds.includes(regionId)) {
+      user.regionIds.push(regionId);
+    }
+    if (regionId && !userIdsByRegionId[regionId].includes(user.id)) {
+      userIdsByRegionId[regionId].push(user.id);
+    }
+  };
+
+  if (regionsEnabled) {
+    onboardingRegionDraft
+      .filter((draft) => draft.enabled)
+      .forEach((draft) => {
+        const regionId = regionIdByDraftId.get(draft.id);
+        parseOnboardingLines(draft.members).forEach((name) => addUser(name, regionId));
+      });
+  } else {
+    parseOnboardingLines(elements.onboardingGlobalMembersInput?.value).forEach((name) => addUser(name));
+  }
+
+  return { users, userIdsByRegionId };
+}
+
+function parseOnboardingLines(value) {
+  return Array.from(new Set(String(value || "")
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)));
 }
 
 function renderRegionScopeControls() {
@@ -2759,7 +3186,7 @@ function getUserRegions(user) {
 }
 
 function areRegionsEnabled() {
-  return data.regionsEnabled !== false;
+  return data.regionsEnabled === true;
 }
 
 function getQueueCardMessage(row) {
@@ -7513,17 +7940,18 @@ function resetData() {
     return;
   }
 
-  showGenericConfirm("Reset data", "Reset to sample data? This replaces local browser data.", () => {
-    data = cloneData(defaultData);
+  showGenericConfirm("Reset data", "Reset to a blank setup? This replaces the current scheduler data and shows onboarding again.", () => {
+    data = createEmptyData();
+    resetOnboardingForm();
     clearSelectedAssignee();
-    completeAdminSave("Sample data restored.", "data");
+    completeAdminSave("Data reset. Start setup.", "data");
   });
 }
 
 function loadData() {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (!saved) {
-    return cloneData(defaultData);
+    return createEmptyData();
   }
 
   try {
@@ -7531,7 +7959,7 @@ function loadData() {
     validateData(parsed);
     return parsed;
   } catch {
-    return cloneData(defaultData);
+    return createEmptyData();
   }
 }
 
@@ -7550,6 +7978,11 @@ async function initializeSharedState() {
       applySharedStatePayload(payload);
       return;
     }
+
+    data = createEmptyData();
+    normalizeData();
+    lastPersistedData = cloneData(data);
+    return;
   } catch {
     sharedStateAvailable = false;
   }
@@ -8440,6 +8873,12 @@ function normalizeAssignmentIncident(entry) {
 }
 
 function normalizeData() {
+  const hadExplicitRegionsFlag = typeof data.regionsEnabled === "boolean";
+  const hasStoredRegions = Array.isArray(data.regions) && data.regions.length > 0;
+  const shouldKeepLegacyRegionsEnabled = !hadExplicitRegionsFlag && hasStoredRegions && hasConfiguredSchedulerData(data);
+  data.setup = data.setup && typeof data.setup === "object" ? data.setup : {};
+  data.setup.completed = data.setup.completed === true;
+  data.setup.teamName = String(data.setup.teamName || "").trim();
   data.assignmentLog = Array.isArray(data.assignmentLog) ? data.assignmentLog : [];
   data.assignmentLog.forEach(normalizeAssignmentIncident);
   data.assignmentRules = normalizeAssignmentRulesConfig(data.assignmentRules);
@@ -8447,8 +8886,8 @@ function normalizeData() {
   data.retentionPolicy = normalizeRetentionPolicy(data.retentionPolicy);
   data.exceptions = Array.isArray(data.exceptions) ? data.exceptions : [];
   data.holidays = Array.isArray(data.holidays) ? data.holidays : [];
-  data.regionsEnabled = data.regionsEnabled !== false;
-  data.regions = Array.isArray(data.regions) ? data.regions : cloneData(DEFAULT_REGIONS);
+  data.regionsEnabled = data.regionsEnabled === true || shouldKeepLegacyRegionsEnabled;
+  data.regions = Array.isArray(data.regions) ? data.regions : [];
   const normalizedRegions = [];
   data.regions.forEach((region) => {
     const name = String(region?.name || region?.label || "").trim();
@@ -8550,6 +8989,12 @@ function normalizeData() {
   data.queueBaselines = normalizeQueueBaselines(data.queueBaselines);
 
   rebuildQueuesFromAssignmentLog();
+}
+
+function hasConfiguredSchedulerData(candidate) {
+  return candidate?.setup?.completed === true
+    || (Array.isArray(candidate?.users) && candidate.users.length > 0)
+    || (Array.isArray(candidate?.systems) && candidate.systems.length > 0);
 }
 
 function normalizeDelegationSlotRecord(slot, existingIds = []) {
