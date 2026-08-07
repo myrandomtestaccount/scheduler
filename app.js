@@ -3445,12 +3445,13 @@ function renderAssignmentConfirmation(hasSelectedSystem) {
 function renderAssignmentConfirmationItem(entry) {
   const devModeText = formatAssignmentDevModeText(entry);
   const regionText = formatAssignmentRegionText(entry);
+  const queuePositionText = formatAssignmentQueuePositionText(entry);
   const incidentAction = renderIncidentAction(entry);
   return `
     <div class="list-item assignment-log-item assignment-confirmation-item">
       <div>
         <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
-        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}${escapeHtml(regionText)}${escapeHtml(devModeText)}</div>
+        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}${escapeHtml(regionText)}${escapeHtml(queuePositionText)}${escapeHtml(devModeText)}</div>
       </div>
       <div class="assignment-confirmation-actions">
         <span class="assignment-done-badge">Assigned</span>
@@ -3470,6 +3471,7 @@ function renderAssignmentListItem(entry, options = {}) {
   const amendedText = amendedAt ? ` · Amended ${amendedAt}` : "";
   const devModeText = formatAssignmentDevModeText(entry);
   const regionText = formatAssignmentRegionText(entry);
+  const queuePositionText = formatAssignmentQueuePositionText(entry);
   const doneBadge = options.showDoneBadge
     ? "<span class=\"assignment-done-badge\">Assigned</span>"
     : "";
@@ -3487,7 +3489,7 @@ function renderAssignmentListItem(entry, options = {}) {
     <div class="list-item assignment-log-item">
       <div>
         <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
-        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}${escapeHtml(regionText)} · ${escapeHtml(assignedAt)}${escapeHtml(devModeText)}${escapeHtml(amendedText)}</div>
+        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}${escapeHtml(regionText)}${escapeHtml(queuePositionText)} · Assigned: ${escapeHtml(assignedAt)}${escapeHtml(devModeText)}${escapeHtml(amendedText)}</div>
       </div>
       ${doneBadge}
       ${actions}
@@ -3501,6 +3503,18 @@ function formatAssignmentDevModeText(entry) {
 
 function formatAssignmentRegionText(entry) {
   return entry?.regionId ? ` · ${entry.regionName || getRegionScopeLabel(entry.regionId)}` : "";
+}
+
+function formatAssignmentQueuePositionText(entry) {
+  const label = String(entry?.queuePositionLabel || "").trim();
+  if (label) {
+    return ` · ${label}`;
+  }
+
+  const position = Number.parseInt(entry?.queuePosition, 10);
+  return Number.isFinite(position) && position > 0
+    ? ` · ${getOrdinalLabel(position)} in line`
+    : "";
 }
 
 function renderAssignmentEditor(entry) {
@@ -3527,7 +3541,7 @@ function renderAssignmentEditor(entry) {
           <select data-edit-field="userId" required>${userOptions}</select>
         </label>
       </div>
-      <div class="assignment-edit-meta">Original time: ${escapeHtml(formatAssignmentTimestamp(entry))}${escapeHtml(formatAssignmentDevModeText(entry))}</div>
+      <div class="assignment-edit-meta">Assigned: ${escapeHtml(formatAssignmentTimestamp(entry))}${escapeHtml(formatAssignmentDevModeText(entry))}</div>
       <div class="item-actions assignment-edit-actions">
         <button class="primary-button" type="submit">Save</button>
         <button class="secondary-button" type="button" data-action="cancel-assignment-edit">Cancel</button>
@@ -3566,9 +3580,16 @@ function bindAssignmentLogActions() {
 }
 
 function formatAssignmentTimestamp(entry) {
+  if (entry.assignedAt) {
+    const assignedAt = new Date(entry.assignedAt);
+    if (!Number.isNaN(assignedAt.getTime())) {
+      return formatInstantDateTimeForDisplay(assignedAt);
+    }
+  }
+
   return entry.easternDate && entry.easternTime
     ? formatEasternDateTimeForDisplay(entry.easternDate, entry.easternTime)
-    : formatInstantDateTimeForDisplay(new Date(entry.assignedAt));
+    : "";
 }
 
 function formatAmendedTimestamp(entry) {
@@ -3600,12 +3621,18 @@ function saveAmendedAssignment(event) {
     return;
   }
 
+  const queuePositionChanged = entry.systemId !== system.id || entry.userId !== user.id;
   entry.systemId = system.id;
   entry.systemName = system.name;
   entry.regionId = entryRegionId;
   entry.regionName = getRegionScopeLabel(entryRegionId);
   entry.userId = user.id;
   entry.userName = user.name;
+  if (queuePositionChanged) {
+    delete entry.queuePosition;
+    delete entry.queuePositionLabel;
+    delete entry.queuePositionType;
+  }
   entry.amendedAt = new Date().toISOString();
   editingAssignmentId = null;
   lastAssignmentId = entry.id;
@@ -7126,6 +7153,7 @@ function markSelectedAssigned(options = {}) {
     return;
   }
 
+  const queuePositionSnapshot = getAssignmentQueuePositionSnapshot(queueState, selectedRow);
   const assignmentRecord = {
     id: makeRecordId("assignment"),
     assignedAt: new Date().toISOString(),
@@ -7138,6 +7166,9 @@ function markSelectedAssigned(options = {}) {
     systemName: queueState.system.name,
     regionId: queueState.regionId,
     regionName: getRegionScopeLabel(queueState.regionId),
+    queuePosition: queuePositionSnapshot.position,
+    queuePositionLabel: queuePositionSnapshot.label,
+    queuePositionType: queuePositionSnapshot.type,
     serviceNowConfigItem: String(queueState.system.serviceNowConfigItem || "").trim(),
     userId: assignmentRow.user.id,
     userName: assignmentRow.user.name
@@ -7182,6 +7213,17 @@ function showLongWaitAssignmentSpeedBump(row, onConfirm) {
     confirmClass: "primary-button",
     variant: "assignment-speed-bump"
   });
+}
+
+function getAssignmentQueuePositionSnapshot(queueState, selectedRow) {
+  if (selectedRow?.isOther) {
+    return { position: null, label: "Other", type: "other" };
+  }
+
+  const position = queueState.rows.findIndex((row) => row.user.id === selectedRow?.user.id && !row.isOther) + 1;
+  return position > 0
+    ? { position, label: `${getOrdinalLabel(position)} in line`, type: "queue" }
+    : { position: null, label: "", type: "" };
 }
 
 function getQueueState(systemId, easternNow, regionId = selectedAssignmentRegionId) {
