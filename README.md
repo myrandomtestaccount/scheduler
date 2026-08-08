@@ -161,21 +161,23 @@ Use `Export JSON file` before moving data to another computer or browser profile
 When launched with `node server.js`, the app uses a shared JSON file instead:
 
 ```text
-~/Documents/scheduler-config/scheduler-state.json
+config/scheduler-state.json
 ```
 
-On this Mac that resolves to `/Users/antonmaslov/Documents/scheduler-config/scheduler-state.json`. On Windows it resolves to `C:\Users\<you>\Documents\scheduler-config\scheduler-state.json`.
+On macOS, Windows, and Linux this folder lives inside the scheduler project directory, so the shared data is easy to find next to the app files.
+
+If an older default shared file exists in the previous Documents-based folder, the first server launch copies it into `config/scheduler-state.json`. New saves use only the local `config` folder unless `--config-dir` or `SCHEDULER_CONFIG_DIR` is set.
 
 Shared mode also writes dated JSON snapshots before overwriting existing data:
 
 ```text
-~/Documents/scheduler-config/backups/scheduler-state-MMDDYYYY_01.json
+config/backups/scheduler-state-MMDDYYYY_01.json
 ```
 
 The server log is saved in the same config folder:
 
 ```text
-~/Documents/scheduler-config/scheduler.log
+config/scheduler.log
 ```
 
 Retention cleanup removes old ticket history, OOO/break records, and delegation records while keeping team, schedules, regions, systems, rules, shifts, and current queue positions.

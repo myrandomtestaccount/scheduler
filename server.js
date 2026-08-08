@@ -8,14 +8,13 @@ const appRoot = __dirname;
 const args = parseArgs(process.argv.slice(2));
 const port = Number(args.port || process.env.PORT || 4173);
 const host = String(args.host || process.env.HOST || "0.0.0.0");
-const configDir = path.resolve(
-  args["config-dir"]
-    || process.env.SCHEDULER_CONFIG_DIR
-    || path.join(os.homedir(), "Documents", "scheduler-config")
-);
+const configuredConfigDir = args["config-dir"] || process.env.SCHEDULER_CONFIG_DIR || "";
+const defaultConfigDir = path.join(appRoot, "config");
+const configDir = path.resolve(configuredConfigDir || defaultConfigDir);
 const stateFile = path.join(configDir, "scheduler-state.json");
 const logFile = path.join(configDir, "scheduler.log");
 const backupDir = path.join(configDir, "backups");
+const legacyDefaultStateFile = path.join(os.homedir(), "Documents", "scheduler-config", "scheduler-state.json");
 const BACKUP_TIME_ZONE = "America/New_York";
 const DEFAULT_BACKUP_SNAPSHOT_RETENTION_DAYS = 90;
 const BACKUP_FILENAME_PATTERN = /^scheduler-state-(\d{8})_(\d+)\.json$/;
@@ -132,6 +131,7 @@ async function serveStaticFile(urlPath, request, response) {
 }
 
 async function readStateFile() {
+  await importLegacyDefaultStateFile();
   try {
     const text = await fs.readFile(stateFile, "utf8");
     const data = JSON.parse(text);
@@ -151,6 +151,7 @@ async function readStateFile() {
 }
 
 async function writeStateFile(data) {
+  await importLegacyDefaultStateFile();
   await fs.mkdir(configDir, { recursive: true });
   const text = `${JSON.stringify(data, null, 2)}\n`;
   const currentText = await readCurrentStateText();
@@ -170,6 +171,44 @@ async function writeStateFile(data) {
     data,
     backupPath
   };
+}
+
+async function importLegacyDefaultStateFile() {
+  if (configuredConfigDir) {
+    return;
+  }
+
+  try {
+    await fs.access(stateFile);
+    return;
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  let text;
+  try {
+    text = await fs.readFile(legacyDefaultStateFile, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return;
+    }
+
+    logWarn(`Could not read existing shared config: ${error.message}`);
+    return;
+  }
+
+  try {
+    validateSchedulerData(JSON.parse(text));
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(stateFile, text.endsWith("\n") ? text : `${text}\n`, { flag: "wx" });
+    logInfo(`Imported existing shared config: ${stateFile}`);
+  } catch (error) {
+    if (error.code !== "EEXIST") {
+      logWarn(`Could not import existing shared config: ${error.message}`);
+    }
+  }
 }
 
 async function readCurrentStateText() {
