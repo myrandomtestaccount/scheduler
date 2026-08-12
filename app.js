@@ -98,6 +98,37 @@ const DEFAULT_RETENTION_POLICY = {
   delegationDays: 365,
   backupSnapshotDays: 90
 };
+const CONFIG_JSON_ROOT_FIELDS = [
+  "setup",
+  "users",
+  "systems",
+  "shiftTemplates",
+  "assignmentRules",
+  "displayTimezones",
+  "incidentConfig",
+  "retentionPolicy",
+  "regionsEnabled",
+  "regions",
+  "regionalSettings",
+  "delegationSlots"
+];
+const CONFIG_JSON_REGIONAL_SETTINGS_FIELDS = [
+  "assignmentRules",
+  "shiftTemplates",
+  "teamOrderIds"
+];
+const ACTIVITY_JSON_ROOT_FIELDS = [
+  "queues",
+  "queueBaselines",
+  "delegations",
+  "exceptions",
+  "holidays",
+  "assignmentLog"
+];
+const ACTIVITY_JSON_REGIONAL_SETTINGS_FIELDS = [
+  "queues",
+  "holidays"
+];
 const DEV_MODE_TIME_OPTION_ID = "__dev_mode__";
 const DEFAULT_DISPLAY_TIMEZONES = [
   { id: "et", timeZone: EASTERN_TIME_ZONE, label: "Eastern (New York)" },
@@ -1097,6 +1128,11 @@ function activateTab(tabName) {
     selectedAssignmentPolicyId = null;
     renderAssignmentRules();
   }
+  if (tabName === "incidents") {
+    updateIncidentConfigControlState();
+    return;
+  }
+
   renderAdminLocks();
 }
 
@@ -2832,6 +2868,11 @@ function handleAdminLockAction(event) {
     unlockedAdminTabs.add(tabName);
   } else {
     unlockedAdminTabs.delete(tabName);
+  }
+
+  if (tabName === "incidents") {
+    updateIncidentConfigControlState();
+    return;
   }
 
   renderAdminLocks();
@@ -4776,7 +4817,7 @@ function renderDataPreview() {
     return;
   }
 
-  elements.dataPreview.value = JSON.stringify(data, null, 2);
+  elements.dataPreview.value = JSON.stringify(buildConfigJsonSnapshot(data), null, 2);
 }
 
 function renderRetentionPolicy() {
@@ -4958,6 +4999,8 @@ function updateIncidentConfigControlState() {
   const enabled = Boolean(elements.incidentEnabledInput?.checked);
   const mode = getSelectedIncidentCreationMode();
   const teamsEnabled = Boolean(elements.teamsEnabledInput?.checked);
+  const unlocked = isAdminTabUnlocked("incidents");
+  const showIncidentDetails = enabled || unlocked;
 
   if (elements.incidentEnabledLabel) {
     elements.incidentEnabledLabel.textContent = enabled ? "Yes" : "No";
@@ -4966,11 +5009,20 @@ function updateIncidentConfigControlState() {
     elements.teamsEnabledLabel.textContent = teamsEnabled ? "Yes" : "No";
   }
 
-  elements.incidentConfigFields?.classList.toggle("incident-config-disabled", !enabled);
-  elements.incidentRedirectSettings?.classList.toggle("incident-settings-disabled", !enabled || mode !== "redirect");
-  elements.incidentServiceNowSettings?.classList.toggle("incident-settings-disabled", !enabled || mode !== "servicenow");
-  elements.teamsConfigFields?.classList.toggle("incident-settings-disabled", !enabled || !teamsEnabled);
+  setIncidentPanelVisible(elements.incidentConfigFields, showIncidentDetails, "incident-config-disabled");
+  setIncidentPanelVisible(elements.incidentRedirectSettings, showIncidentDetails && mode === "redirect", "incident-settings-disabled");
+  setIncidentPanelVisible(elements.incidentServiceNowSettings, showIncidentDetails && mode === "servicenow", "incident-settings-disabled");
+  setIncidentPanelVisible(elements.teamsConfigFields, showIncidentDetails && (teamsEnabled || unlocked), "incident-settings-disabled");
   renderAdminLocks();
+}
+
+function setIncidentPanelVisible(panel, visible, disabledClass) {
+  if (!panel) {
+    return;
+  }
+
+  panel.classList.toggle("hidden", !visible);
+  panel.classList.toggle(disabledClass, !visible);
 }
 
 function saveIncidentConfig(event) {
@@ -7940,11 +7992,11 @@ function getOooRetentionDate(holiday) {
 }
 
 function exportData() {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(buildConfigJsonSnapshot(data), null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `sme-scheduler-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = `scheduler-config-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -7964,10 +8016,11 @@ function importData(event) {
   reader.onload = () => {
     try {
       const imported = JSON.parse(String(reader.result));
-      validateData(imported);
-      data = imported;
+      const nextData = mergeConfigJsonSnapshot(imported, data);
+      validateData(nextData);
+      data = nextData;
       clearSelectedAssignee();
-      completeAdminSave("Backup imported.", "data");
+      completeAdminSave("Config imported. Activity preserved.", "data");
     } catch (error) {
       showGenericAlert("Import failed", `Could not import JSON: ${error.message}`);
     } finally {
@@ -7975,6 +8028,98 @@ function importData(event) {
     }
   };
   reader.readAsText(file);
+}
+
+function buildConfigJsonSnapshot(sourceData = data) {
+  const source = sourceData && typeof sourceData === "object" ? sourceData : {};
+  const snapshot = {};
+  CONFIG_JSON_ROOT_FIELDS.forEach((fieldName) => {
+    if (fieldName === "regionalSettings") {
+      snapshot.regionalSettings = buildConfigRegionalSettingsSnapshot(source.regionalSettings);
+      return;
+    }
+
+    if (fieldName in source) {
+      snapshot[fieldName] = cloneData(source[fieldName]);
+    }
+  });
+  return snapshot;
+}
+
+function buildConfigRegionalSettingsSnapshot(regionalSettings) {
+  const source = regionalSettings && typeof regionalSettings === "object" ? regionalSettings : {};
+  const snapshot = {};
+  Object.entries(source).forEach(([regionId, settings]) => {
+    const settingsSource = settings && typeof settings === "object" ? settings : {};
+    const configSettings = {};
+    CONFIG_JSON_REGIONAL_SETTINGS_FIELDS.forEach((fieldName) => {
+      if (fieldName in settingsSource) {
+        configSettings[fieldName] = cloneData(settingsSource[fieldName]);
+      }
+    });
+    snapshot[regionId] = configSettings;
+  });
+  return snapshot;
+}
+
+function mergeConfigJsonSnapshot(importedConfig, currentData = data) {
+  const imported = importedConfig && typeof importedConfig === "object" ? importedConfig : {};
+  const current = cloneData(currentData);
+  const nextData = cloneData(current);
+  CONFIG_JSON_ROOT_FIELDS.forEach((fieldName) => {
+    if (fieldName === "regionalSettings") {
+      nextData.regionalSettings = mergeConfigRegionalSettingsSnapshot(imported.regionalSettings, current.regionalSettings);
+      return;
+    }
+
+    if (fieldName in imported) {
+      nextData[fieldName] = cloneData(imported[fieldName]);
+    }
+  });
+  ACTIVITY_JSON_ROOT_FIELDS.forEach((fieldName) => {
+    nextData[fieldName] = cloneData(current[fieldName]);
+  });
+  nextData.regionalSettings = mergeActivityRegionalSettingsSnapshot(nextData.regionalSettings, current.regionalSettings);
+  return nextData;
+}
+
+function mergeConfigRegionalSettingsSnapshot(importedSettings, currentSettings) {
+  const imported = importedSettings && typeof importedSettings === "object" ? importedSettings : {};
+  const current = currentSettings && typeof currentSettings === "object" ? currentSettings : {};
+  const regionIds = new Set([...Object.keys(imported), ...Object.keys(current)]);
+  const merged = {};
+  regionIds.forEach((regionId) => {
+    const importedRegion = imported[regionId] && typeof imported[regionId] === "object" ? imported[regionId] : {};
+    const currentRegion = current[regionId] && typeof current[regionId] === "object" ? current[regionId] : {};
+    const nextRegion = {};
+    CONFIG_JSON_REGIONAL_SETTINGS_FIELDS.forEach((fieldName) => {
+      if (fieldName in importedRegion) {
+        nextRegion[fieldName] = cloneData(importedRegion[fieldName]);
+      } else if (fieldName in currentRegion) {
+        nextRegion[fieldName] = cloneData(currentRegion[fieldName]);
+      }
+    });
+    merged[regionId] = nextRegion;
+  });
+  return merged;
+}
+
+function mergeActivityRegionalSettingsSnapshot(nextSettings, currentSettings) {
+  const next = nextSettings && typeof nextSettings === "object" ? nextSettings : {};
+  const current = currentSettings && typeof currentSettings === "object" ? currentSettings : {};
+  const regionIds = new Set([...Object.keys(next), ...Object.keys(current)]);
+  const merged = {};
+  regionIds.forEach((regionId) => {
+    const nextRegion = next[regionId] && typeof next[regionId] === "object" ? next[regionId] : {};
+    const currentRegion = current[regionId] && typeof current[regionId] === "object" ? current[regionId] : {};
+    merged[regionId] = cloneData(nextRegion);
+    ACTIVITY_JSON_REGIONAL_SETTINGS_FIELDS.forEach((fieldName) => {
+      if (fieldName in currentRegion) {
+        merged[regionId][fieldName] = cloneData(currentRegion[fieldName]);
+      }
+    });
+  });
+  return merged;
 }
 
 function resetData() {

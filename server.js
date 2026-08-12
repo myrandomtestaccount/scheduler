@@ -11,13 +11,48 @@ const host = String(args.host || process.env.HOST || "0.0.0.0");
 const configuredConfigDir = args["config-dir"] || process.env.SCHEDULER_CONFIG_DIR || "";
 const defaultConfigDir = path.join(appRoot, "config");
 const configDir = path.resolve(configuredConfigDir || defaultConfigDir);
-const stateFile = path.join(configDir, "scheduler-state.json");
+const configFile = path.join(configDir, "scheduler-config.json");
+const activityFile = path.join(configDir, "scheduler-activity.json");
 const logFile = path.join(configDir, "scheduler.log");
 const backupDir = path.join(configDir, "backups");
-const legacyDefaultStateFile = path.join(os.homedir(), "Documents", "scheduler-config", "scheduler-state.json");
 const BACKUP_TIME_ZONE = "America/New_York";
 const DEFAULT_BACKUP_SNAPSHOT_RETENTION_DAYS = 90;
-const BACKUP_FILENAME_PATTERN = /^scheduler-state-(\d{8})_(\d+)\.json$/;
+const BACKUP_FILENAME_PATTERN = /^scheduler-(?:config|activity)-(\d{8})_(\d+)\.json$/;
+const CONFIG_ROOT_FIELD_ORDER = [
+  "setup",
+  "users",
+  "systems",
+  "shiftTemplates",
+  "assignmentRules",
+  "displayTimezones",
+  "incidentConfig",
+  "retentionPolicy",
+  "regionsEnabled",
+  "regions",
+  "regionalSettings",
+  "delegationSlots"
+];
+const ACTIVITY_ROOT_FIELD_ORDER = [
+  "queues",
+  "queueBaselines",
+  "delegations",
+  "exceptions",
+  "holidays",
+  "assignmentLog"
+];
+const REGIONAL_CONFIG_FIELD_ORDER = [
+  "assignmentRules",
+  "shiftTemplates",
+  "teamOrderIds"
+];
+const REGIONAL_ACTIVITY_FIELD_ORDER = [
+  "queues",
+  "holidays"
+];
+const ACTIVITY_ROOT_KEYS = new Set(ACTIVITY_ROOT_FIELD_ORDER);
+const CONFIG_ROOT_KEYS = new Set(CONFIG_ROOT_FIELD_ORDER);
+const ACTIVITY_REGIONAL_SETTINGS_KEYS = new Set(REGIONAL_ACTIVITY_FIELD_ORDER);
+const CONFIG_REGIONAL_SETTINGS_KEYS = new Set(REGIONAL_CONFIG_FIELD_ORDER);
 let stateLock = Promise.resolve();
 let logWriteQueue = Promise.resolve();
 
@@ -45,7 +80,8 @@ const server = http.createServer(async (request, response) => {
 server.listen(port, host, () => {
   logInfo("SME Scheduler running:");
   getServerUrls(host, port).forEach((url) => logInfo(`  ${url}`));
-  logInfo(`Shared config: ${stateFile}`);
+  logInfo(`Shared config: ${configFile}`);
+  logInfo(`Shared activity: ${activityFile}`);
   logInfo(`JSON snapshots: ${backupDir}`);
   logInfo(`Log file: ${logFile}`);
 });
@@ -56,7 +92,8 @@ async function handleStateRequest(request, response) {
     sendJson(response, 200, {
       revision: current.revision,
       data: current.data,
-      configPath: stateFile
+      configPath: configFile,
+      activityPath: activityFile
     });
     return;
   }
@@ -88,15 +125,16 @@ async function handleStateRequest(request, response) {
     }
 
     const saved = await writeStateFile(body.data);
-    logInfo(`Saved shared config: ${stateFile}`);
-    if (saved.backupPath) {
-      logInfo(`Created JSON snapshot: ${saved.backupPath}`);
-    }
+    logInfo(`Saved shared config: ${configFile}`);
+    logInfo(`Saved shared activity: ${activityFile}`);
+    saved.backupPaths.forEach((backupPath) => logInfo(`Created JSON snapshot: ${backupPath}`));
     sendJson(response, 200, {
       revision: saved.revision,
       data: saved.data,
-      configPath: stateFile,
-      backupPath: saved.backupPath
+      configPath: configFile,
+      activityPath: activityFile,
+      backupPath: saved.backupPaths[0] || null,
+      backupPaths: saved.backupPaths
     });
   });
 }
@@ -131,14 +169,23 @@ async function serveStaticFile(urlPath, request, response) {
 }
 
 async function readStateFile() {
-  await importLegacyDefaultStateFile();
   try {
-    const text = await fs.readFile(stateFile, "utf8");
-    const data = JSON.parse(text);
+    const [configText, activityText] = await Promise.all([
+      readCurrentFileText(configFile),
+      readCurrentFileText(activityFile)
+    ]);
+    if (!configText && !activityText) {
+      return { exists: false, revision: null, data: null };
+    }
+
+    const data = mergeSchedulerStateParts(
+      configText ? JSON.parse(configText) : {},
+      activityText ? JSON.parse(activityText) : {}
+    );
     validateSchedulerData(data);
     return {
       exists: true,
-      revision: hashText(text),
+      revision: getStateRevision(configText, activityText),
       data
     };
   } catch (error) {
@@ -151,69 +198,27 @@ async function readStateFile() {
 }
 
 async function writeStateFile(data) {
-  await importLegacyDefaultStateFile();
   await fs.mkdir(configDir, { recursive: true });
-  const text = `${JSON.stringify(data, null, 2)}\n`;
-  const currentText = await readCurrentStateText();
-  const backupPath = currentText && hashText(currentText) !== hashText(text)
-    ? await writeBackupSnapshot(currentText)
-    : null;
-  const tempFile = path.join(configDir, `.scheduler-state.${process.pid}.${Date.now()}.tmp`);
-  await fs.writeFile(tempFile, text, "utf8");
-  await fs.rename(tempFile, stateFile);
+  const stateParts = splitSchedulerState(data);
+  const [savedConfig, savedActivity] = await Promise.all([
+    writeJsonDataFile(configFile, "scheduler-config", stateParts.config),
+    writeJsonDataFile(activityFile, "scheduler-activity", stateParts.activity)
+  ]);
   try {
     await cleanupBackupSnapshots(getBackupSnapshotRetentionDays(data));
   } catch (error) {
     logWarn(`Could not clean JSON snapshots: ${error.message}`);
   }
   return {
-    revision: hashText(text),
+    revision: getStateRevision(savedConfig.text, savedActivity.text),
     data,
-    backupPath
+    backupPaths: [savedConfig.backupPath, savedActivity.backupPath].filter(Boolean)
   };
 }
 
-async function importLegacyDefaultStateFile() {
-  if (configuredConfigDir) {
-    return;
-  }
-
+async function readCurrentFileText(filePath) {
   try {
-    await fs.access(stateFile);
-    return;
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error;
-    }
-  }
-
-  let text;
-  try {
-    text = await fs.readFile(legacyDefaultStateFile, "utf8");
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return;
-    }
-
-    logWarn(`Could not read existing shared config: ${error.message}`);
-    return;
-  }
-
-  try {
-    validateSchedulerData(JSON.parse(text));
-    await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(stateFile, text.endsWith("\n") ? text : `${text}\n`, { flag: "wx" });
-    logInfo(`Imported existing shared config: ${stateFile}`);
-  } catch (error) {
-    if (error.code !== "EEXIST") {
-      logWarn(`Could not import existing shared config: ${error.message}`);
-    }
-  }
-}
-
-async function readCurrentStateText() {
-  try {
-    return await fs.readFile(stateFile, "utf8");
+    return await fs.readFile(filePath, "utf8");
   } catch (error) {
     if (error.code === "ENOENT") {
       return "";
@@ -223,16 +228,28 @@ async function readCurrentStateText() {
   }
 }
 
-async function writeBackupSnapshot(text) {
+async function writeJsonDataFile(filePath, snapshotName, data) {
+  const text = `${JSON.stringify(data, null, 2)}\n`;
+  const currentText = await readCurrentFileText(filePath);
+  const backupPath = currentText && hashText(currentText) !== hashText(text)
+    ? await writeBackupSnapshot(currentText, snapshotName)
+    : null;
+  const tempFile = path.join(configDir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+  await fs.writeFile(tempFile, text, "utf8");
+  await fs.rename(tempFile, filePath);
+  return { text, backupPath };
+}
+
+async function writeBackupSnapshot(text, snapshotName) {
   await fs.mkdir(backupDir, { recursive: true });
-  const backupPath = await getNextBackupPath();
+  const backupPath = await getNextBackupPath(snapshotName);
   await fs.writeFile(backupPath, text, "utf8");
   return backupPath;
 }
 
-async function getNextBackupPath(date = new Date()) {
+async function getNextBackupPath(snapshotName, date = new Date()) {
   const dateStamp = formatBackupDateStamp(date);
-  const prefix = `scheduler-state-${dateStamp}_`;
+  const prefix = `${snapshotName}-${dateStamp}_`;
   const files = await readBackupDirectoryFiles();
   const nextSequence = files.reduce((maxSequence, fileName) => {
     if (!fileName.startsWith(prefix) || !fileName.endsWith(".json")) {
@@ -244,6 +261,121 @@ async function getNextBackupPath(date = new Date()) {
   }, 0) + 1;
 
   return path.join(backupDir, `${prefix}${String(nextSequence).padStart(2, "0")}.json`);
+}
+
+function splitSchedulerState(data) {
+  const source = data && typeof data === "object" ? data : {};
+  const splitRegionalSettings = splitRegionalSettingsState(source.regionalSettings);
+  const config = {};
+  const activity = {};
+
+  CONFIG_ROOT_FIELD_ORDER.forEach((key) => {
+    if (key === "regionalSettings") {
+      config.regionalSettings = splitRegionalSettings.config;
+      return;
+    }
+
+    if (key in source) {
+      config[key] = source[key];
+    }
+  });
+
+  Object.entries(source).forEach(([key, value]) => {
+    if (key !== "regionalSettings" && !CONFIG_ROOT_KEYS.has(key) && !ACTIVITY_ROOT_KEYS.has(key)) {
+      config[key] = value;
+    }
+  });
+
+  ACTIVITY_ROOT_FIELD_ORDER.forEach((key) => {
+    if (key in source) {
+      activity[key] = source[key];
+    }
+  });
+
+  activity.queues ||= {};
+  activity.queueBaselines ||= { global: {}, regional: {} };
+  activity.delegations ||= [];
+  activity.exceptions ||= [];
+  activity.holidays ||= [];
+  activity.assignmentLog ||= [];
+  activity.regionalSettings = splitRegionalSettings.activity;
+
+  return { config, activity };
+}
+
+function splitRegionalSettingsState(regionalSettings) {
+  const config = {};
+  const activity = {};
+  const source = regionalSettings && typeof regionalSettings === "object" ? regionalSettings : {};
+
+  Object.entries(source).forEach(([regionId, settings]) => {
+    const configSettings = {};
+    const activitySettings = {};
+    const settingsSource = settings && typeof settings === "object" ? settings : {};
+
+    REGIONAL_CONFIG_FIELD_ORDER.forEach((key) => {
+      if (key in settingsSource) {
+        configSettings[key] = settingsSource[key];
+      }
+    });
+
+    Object.entries(settingsSource).forEach(([key, value]) => {
+      if (!CONFIG_REGIONAL_SETTINGS_KEYS.has(key) && !ACTIVITY_REGIONAL_SETTINGS_KEYS.has(key)) {
+        configSettings[key] = value;
+      }
+    });
+
+    REGIONAL_ACTIVITY_FIELD_ORDER.forEach((key) => {
+      if (key in settingsSource) {
+        activitySettings[key] = settingsSource[key];
+      }
+    });
+
+    config[regionId] = configSettings;
+    activity[regionId] = activitySettings;
+  });
+
+  return { config, activity };
+}
+
+function mergeSchedulerStateParts(config, activity) {
+  const mergedConfig = config && typeof config === "object" ? config : {};
+  const mergedActivity = activity && typeof activity === "object" ? activity : {};
+  return {
+    ...mergedConfig,
+    queues: mergedActivity.queues || {},
+    queueBaselines: mergedActivity.queueBaselines || { global: {}, regional: {} },
+    delegations: Array.isArray(mergedActivity.delegations) ? mergedActivity.delegations : [],
+    exceptions: Array.isArray(mergedActivity.exceptions) ? mergedActivity.exceptions : [],
+    holidays: Array.isArray(mergedActivity.holidays) ? mergedActivity.holidays : [],
+    assignmentLog: Array.isArray(mergedActivity.assignmentLog) ? mergedActivity.assignmentLog : [],
+    regionalSettings: mergeRegionalSettingsParts(mergedConfig.regionalSettings, mergedActivity.regionalSettings)
+  };
+}
+
+function mergeRegionalSettingsParts(configSettings, activitySettings) {
+  const configSource = configSettings && typeof configSettings === "object" ? configSettings : {};
+  const activitySource = activitySettings && typeof activitySettings === "object" ? activitySettings : {};
+  const regionIds = new Set([...Object.keys(configSource), ...Object.keys(activitySource)]);
+  const merged = {};
+
+  regionIds.forEach((regionId) => {
+    merged[regionId] = {
+      ...(configSource[regionId] && typeof configSource[regionId] === "object" ? configSource[regionId] : {}),
+      ...(activitySource[regionId] && typeof activitySource[regionId] === "object" ? activitySource[regionId] : {})
+    };
+  });
+
+  return merged;
+}
+
+function getStateRevision(configText, activityText) {
+  return hashText([
+    "scheduler-config",
+    configText || "",
+    "scheduler-activity",
+    activityText || ""
+  ].join("\n"));
 }
 
 async function cleanupBackupSnapshots(retentionDays) {

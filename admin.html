@@ -375,7 +375,6 @@
             <div>
               <p class="eyebrow">Incident configuration</p>
               <h3>Incident creation and notifications</h3>
-              <p class="meta">Configure what happens after a user is assigned from the main queue.</p>
             </div>
 
             <div class="region-mode-row">
@@ -515,18 +514,18 @@
           <section class="card-form data-management-card">
             <div>
               <p class="eyebrow">JSON files</p>
-              <h3>Export, import, reset</h3>
+              <h3>Config export, import, reset</h3>
             </div>
             <div class="button-row">
-              <button id="exportButton" class="primary-button" type="button" data-lock-exempt>Export JSON file</button>
+              <button id="exportButton" class="primary-button" type="button" data-lock-exempt>Export config JSON</button>
               <label class="file-button">
-                Import JSON file
+                Import config JSON
                 <input id="importInput" type="file" accept="application/json">
               </label>
               <button id="resetButton" class="danger-button" type="button">Reset setup</button>
             </div>
           </section>
-          <textarea id="dataPreview" readonly aria-label="Current scheduler JSON preview"></textarea>
+          <textarea id="dataPreview" readonly aria-label="Current scheduler config JSON preview"></textarea>
         </section>
       </section>
     </main>

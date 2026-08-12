@@ -39,12 +39,12 @@ npm run check
 - `index.html`: primary assignment page for delegators and regular users.
 - `admin.html`: admin-only setup page for team, schedule, coverage, delegation, incidents, and data maintenance.
 - Static mode: opening the HTML files directly stores data in browser `localStorage`.
-- Shared mode: `node server.js` serves the app at `http://localhost:4173` and LAN URLs printed in the terminal, then stores shared state in a JSON file.
+- Shared mode: `node server.js` serves the app at `http://localhost:4173` and LAN URLs printed in the terminal, then stores shared state in split JSON files.
 - Windows launcher: `start-shared.bat` starts shared mode on Windows when Node.js is installed.
 - macOS launcher: `start-shared.command` starts shared mode on macOS.
 - Shared-state conflict handling: saves use optimistic locking, reload newer shared data when another browser saves first, and show a sync warning.
 - First-run setup: missing or empty scheduler data opens onboarding instead of loading sample users or regions.
-- Data maintenance: admins can set retention, run cleanup, export/import JSON, preview data, and reset to onboarding.
+- Data maintenance: admins can set retention, run cleanup, export/import config JSON, preview config, and reset to onboarding.
 
 ### Main Assignment Page
 
@@ -156,22 +156,28 @@ npm run check
 
 When opened directly from `index.html`, the app saves to browser `localStorage`.
 
-Use `Export JSON file` before moving data to another computer or browser profile. Use `Import JSON file` to restore it.
+Use `Export config JSON` before moving setup to another computer or browser profile. Use `Import config JSON` to restore setup without overwriting activity/history.
 
-When launched with `node server.js`, the app uses a shared JSON file instead:
+When launched with `node server.js`, the app uses shared JSON files instead:
 
 ```text
-config/scheduler-state.json
+config/scheduler-config.json
+config/scheduler-activity.json
 ```
 
 On macOS, Windows, and Linux this folder lives inside the scheduler project directory, so the shared data is easy to find next to the app files.
 
-If an older default shared file exists in the previous Documents-based folder, the first server launch copies it into `config/scheduler-state.json`. New saves use only the local `config` folder unless `--config-dir` or `SCHEDULER_CONFIG_DIR` is set.
+`scheduler-config.json` stores setup/admin configuration: team, users, schedules, regions, shifts, coverage systems, rules, incidents, delegation slots, display timezones, and retention policy.
+
+`scheduler-activity.json` stores operational activity: current queue positions, queue baselines, recent assignments, OOO/break records, extra availability slots, and delegation assignments.
+
+New saves use only these two split files in `config` unless `--config-dir` or `SCHEDULER_CONFIG_DIR` is set.
 
 Shared mode also writes dated JSON snapshots before overwriting existing data:
 
 ```text
-config/backups/scheduler-state-MMDDYYYY_01.json
+config/backups/scheduler-config-MMDDYYYY_01.json
+config/backups/scheduler-activity-MMDDYYYY_01.json
 ```
 
 The server log is saved in the same config folder:
@@ -213,7 +219,7 @@ Admin sections:
 - `Systems / apps`: add systems, select one or more regions per system, define ServiceNow config items when ServiceNow mode is enabled, and assign/reorder primary SMEs from those selected regions.
 - `Incidents`: turn incident creation on/off, configure post-assignment redirects, and prepare ServiceNow or Teams settings.
 - `OOO`: add all-day OOO ranges or timed breaks for an individual user, or choose `All users in <region>` for region-wide OOO.
-- `Data maintenance`: set cleanup retention, run cleanup, export/import JSON files, and reset to onboarding.
+- `Data maintenance`: set cleanup retention, run cleanup, export/import config JSON, and reset to onboarding.
 
 Incident templates support `{{assignee}}`, `{{assignee_mention}}`, `{{coverage}}`, `{{assigned_at}}`, `{{incident_url}}`, `{{servicenow_incident_description}}`, and `{{servicenow_incident_id}}`.
 
