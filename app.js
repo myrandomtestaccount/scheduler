@@ -3508,11 +3508,11 @@ function renderAssignmentListItem(entry, options = {}) {
   }
 
   const assignedAt = formatAssignmentTimestamp(entry);
-  const amendedAt = formatAmendedTimestamp(entry);
-  const amendedText = amendedAt ? ` · Amended ${amendedAt}` : "";
+  const editedText = formatAssignmentEditedText(entry);
   const devModeText = formatAssignmentDevModeText(entry);
   const regionText = formatAssignmentRegionText(entry);
   const queuePositionText = formatAssignmentQueuePositionText(entry);
+  const editedBadge = renderAssignmentEditedBadge(entry);
   const doneBadge = options.showDoneBadge
     ? "<span class=\"assignment-done-badge\">Assigned</span>"
     : "";
@@ -3529,8 +3529,8 @@ function renderAssignmentListItem(entry, options = {}) {
   return `
     <div class="list-item assignment-log-item">
       <div>
-        <div class="item-title">${escapeHtml(entry.userName || "Removed user")}</div>
-        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}${escapeHtml(regionText)}${escapeHtml(queuePositionText)} · Assigned: ${escapeHtml(assignedAt)}${escapeHtml(devModeText)}${escapeHtml(amendedText)}</div>
+        <div class="item-title assignment-title-row"><span>${escapeHtml(entry.userName || "Removed user")}</span>${editedBadge}</div>
+        <div class="meta">${escapeHtml(entry.systemName || "Removed system")}${escapeHtml(regionText)}${escapeHtml(queuePositionText)} · Assigned: ${escapeHtml(assignedAt)}${escapeHtml(devModeText)}${escapeHtml(editedText)}</div>
       </div>
       ${doneBadge}
       ${actions}
@@ -3560,6 +3560,7 @@ function formatAssignmentQueuePositionText(entry) {
 
 function renderAssignmentEditor(entry) {
   const entryRegionId = normalizeRegionScopeId(entry.regionId);
+  const isLatestEntry = isLatestAssignmentEntry(entry);
   const shiftQueueOption = (isShiftOrderPolicy(entryRegionId) || entry.systemId === SHIFT_QUEUE_SYSTEM_ID)
     ? `<option value="${SHIFT_QUEUE_SYSTEM_ID}" ${entry.systemId === SHIFT_QUEUE_SYSTEM_ID ? "selected" : ""}>${SHIFT_QUEUE_SYSTEM_NAME}</option>`
     : "";
@@ -3569,6 +3570,7 @@ function renderAssignmentEditor(entry) {
   const userOptions = getRankedUsersForRegionScope(entryRegionId).map((user) => `
     <option value="${escapeHtml(user.id)}" ${user.id === entry.userId ? "selected" : ""}>${escapeHtml(user.name)}</option>
   `).join("");
+  const queueCorrectionControl = isLatestEntry ? renderAssignmentQueueCorrectionControl(entry) : "";
 
   return `
     <form class="list-item assignment-log-item assignment-edit-form" data-assignment-edit-id="${escapeHtml(entry.id)}">
@@ -3583,12 +3585,23 @@ function renderAssignmentEditor(entry) {
         </label>
       </div>
       <div class="assignment-edit-meta">Assigned: ${escapeHtml(formatAssignmentTimestamp(entry))}${escapeHtml(formatAssignmentDevModeText(entry))}</div>
+      ${queueCorrectionControl}
       <div class="item-actions assignment-edit-actions">
         <button class="primary-button" type="submit">Save</button>
         <button class="secondary-button" type="button" data-action="cancel-assignment-edit">Cancel</button>
         <button class="remove-button" type="button" data-action="delete-assignment" data-assignment-id="${escapeHtml(entry.id)}">Delete</button>
       </div>
     </form>
+  `;
+}
+
+function renderAssignmentQueueCorrectionControl(entry) {
+  return `
+    <label class="assignment-edit-check">
+      <input type="checkbox" data-edit-field="repairQueue" checked>
+      <span>Fix queue for this reassignment</span>
+    </label>
+    <div class="assignment-edit-meta" data-assignment-correction-impact>${escapeHtml(getAssignmentEditQueueImpact(entry, entry.userId, entry.systemId, true))}</div>
   `;
 }
 
@@ -3617,6 +3630,7 @@ function bindAssignmentLogActions() {
 
   elements.assignmentLog.querySelectorAll("[data-assignment-edit-id]").forEach((form) => {
     form.addEventListener("submit", saveAmendedAssignment);
+    form.addEventListener("change", updateAssignmentEditCorrectionImpact);
   });
 }
 
@@ -3641,9 +3655,175 @@ function formatAmendedTimestamp(entry) {
   return formatInstantDateTimeForDisplay(new Date(entry.amendedAt));
 }
 
+function renderAssignmentEditedBadge(entry) {
+  return entry?.assignmentEdit || entry?.amendedAt
+    ? "<span class=\"status-pill edited\">Edited</span>"
+    : "";
+}
+
+function formatAssignmentEditedText(entry) {
+  const editedAt = formatAmendedTimestamp(entry);
+  if (entry?.assignmentEdit?.type === "reassigned") {
+    const previousUserName = entry.assignmentEdit.previousUserName || "previous assignee";
+    return editedAt
+      ? ` · Edited ${editedAt}: reassigned from ${previousUserName}`
+      : ` · Edited: reassigned from ${previousUserName}`;
+  }
+
+  return editedAt ? ` · Amended ${editedAt}` : "";
+}
+
 function toggleRecentAssignments() {
   showRecentAssignments = !showRecentAssignments;
   renderAssignmentLog();
+}
+
+function getLatestAssignmentEntry() {
+  return data.assignmentLog.reduce((latestEntry, entry) => {
+    if (!latestEntry) {
+      return entry;
+    }
+
+    return getAssignmentCreatedTimestamp(entry) >= getAssignmentCreatedTimestamp(latestEntry)
+      ? entry
+      : latestEntry;
+  }, null);
+}
+
+function isLatestAssignmentEntry(entry) {
+  return Boolean(entry?.id && getLatestAssignmentEntry()?.id === entry.id);
+}
+
+function updateAssignmentEditCorrectionImpact(event) {
+  const form = event.currentTarget;
+  const entry = data.assignmentLog.find((assignment) => assignment.id === form.dataset.assignmentEditId);
+  const impact = form.querySelector("[data-assignment-correction-impact]");
+  if (!entry || !impact) {
+    return;
+  }
+
+  const userId = getAssignmentEditValue(form, "userId");
+  const systemId = getAssignmentEditValue(form, "systemId");
+  const repairQueue = getAssignmentEditChecked(form, "repairQueue");
+  impact.textContent = getAssignmentEditQueueImpact(entry, userId, systemId, repairQueue);
+}
+
+function getAssignmentEditQueueImpact(entry, userId, systemId, repairQueue) {
+  const regionId = normalizeRegionScopeId(entry.regionId);
+  const user = getUsersForRegionScope(regionId).find((item) => item.id === userId);
+  const system = getAssignmentSystemById(systemId, regionId);
+  const previousUserName = entry.userName || "the previous assignee";
+  if (!user || !system) {
+    return "Choose a valid queue and user before saving.";
+  }
+
+  if (!repairQueue) {
+    return "Queue stays as originally moved; only history details change.";
+  }
+
+  const hasPreservedQueueMovement = Boolean(entry.queueUserId || entry.queueSystemId);
+  if (entry.userId === user.id && entry.systemId === system.id && !hasPreservedQueueMovement) {
+    return "No queue fix needed unless you choose a different user or queue.";
+  }
+
+  if (system.id === SHIFT_QUEUE_SYSTEM_ID) {
+    return `Replaces ${previousUserName} with ${user.name} and rebuilds ticket counts from history.`;
+  }
+
+  const userIndex = system.primaryUserIds.indexOf(user.id);
+  if (userIndex < 0) {
+    return `Undoes the original queue move and assigns this task to ${user.name}; fallback assignees do not advance ${system.name}.`;
+  }
+
+  const nextUserId = system.primaryUserIds[(userIndex + 1) % system.primaryUserIds.length];
+  const nextUserName = getUserFromReference(nextUserId)?.name || "the next queue member";
+  return `Replaces ${previousUserName} with ${user.name}; ${system.name} moves behind ${user.name}, making ${nextUserName} next.`;
+}
+
+function applyAssignmentQueueCorrection(entry, user, system, originalEntry) {
+  const editedAt = new Date().toISOString();
+  const entryRegionId = normalizeRegionScopeId(entry.regionId);
+  const queueState = getQueueStateWithAssignmentRemoved(entry, system.id, entryRegionId);
+  const selectedRow = queueState.rows.find((row) => row.user.id === user.id && !row.isOther) || null;
+  const queuePositionSnapshot = selectedRow
+    ? getAssignmentQueuePositionSnapshot(queueState, selectedRow)
+    : { position: null, label: "Other", type: "other" };
+
+  entry.systemId = system.id;
+  entry.systemName = system.name;
+  entry.serviceNowConfigItem = String(system.serviceNowConfigItem || "").trim();
+  entry.userId = user.id;
+  entry.userName = user.name;
+  entry.regionId = entryRegionId;
+  entry.regionName = getRegionScopeLabel(entry.regionId);
+  delete entry.queueUserId;
+  delete entry.queueSystemId;
+  applyAssignmentQueuePositionSnapshot(entry, queuePositionSnapshot);
+  entry.assignmentEdit = {
+    type: "reassigned",
+    editedAt,
+    previousUserId: originalEntry.userId || "",
+    previousUserName: originalEntry.userName || "Removed user",
+    previousSystemId: originalEntry.systemId || "",
+    previousSystemName: originalEntry.systemName || "Removed system"
+  };
+  entry.amendedAt = editedAt;
+}
+
+function applyAssignmentQueuePositionSnapshot(entry, snapshot) {
+  if (snapshot.position) {
+    entry.queuePosition = snapshot.position;
+  } else {
+    delete entry.queuePosition;
+  }
+
+  if (snapshot.label) {
+    entry.queuePositionLabel = snapshot.label;
+  } else {
+    delete entry.queuePositionLabel;
+  }
+
+  if (snapshot.type) {
+    entry.queuePositionType = snapshot.type;
+  } else {
+    delete entry.queuePositionType;
+  }
+}
+
+function getQueueStateWithAssignmentRemoved(entry, systemId = getAssignmentSystemIdForEntry(entry), regionId = normalizeRegionScopeId(entry.regionId)) {
+  const assignmentsBeforeCorrection = data.assignmentLog.filter((assignment) => assignment.id !== entry.id);
+  return withQueuePositionsFromAssignments(assignmentsBeforeCorrection, () => getQueueState(systemId, getEasternNow(), regionId));
+}
+
+function withQueuePositionsFromAssignments(assignments, callback) {
+  const previousQueues = cloneData(data.queues);
+  const previousRegionalSettings = cloneData(data.regionalSettings);
+  const rebuiltQueuePositions = buildQueuePositionsFromAssignmentLog(assignments, data.queueBaselines);
+
+  data.queues = rebuiltQueuePositions.global;
+  if (hasRegionalScopes()) {
+    data.regions.forEach((region) => {
+      getRegionSettings(region.id).queues = rebuiltQueuePositions.regional[region.id] || {};
+    });
+  }
+
+  try {
+    return callback();
+  } finally {
+    data.queues = previousQueues;
+    data.regionalSettings = previousRegionalSettings;
+  }
+}
+
+function getAssignmentSystemIdForEntry(entry) {
+  return entry.systemId || getAssignmentSystemForEntry(entry)?.id || "";
+}
+
+function getAssignmentSystemForEntry(entry) {
+  const regionId = normalizeRegionScopeId(entry?.regionId);
+  return getAssignmentSystemById(entry?.systemId, regionId)
+    || getScopedSystems(regionId).find((system) => isAssignmentForSystem(entry, system, regionId))
+    || null;
 }
 
 function saveAmendedAssignment(event) {
@@ -3662,19 +3842,48 @@ function saveAmendedAssignment(event) {
     return;
   }
 
+  const originalEntry = cloneData(entry);
+  const isLatestEntry = isLatestAssignmentEntry(entry);
   const queuePositionChanged = entry.systemId !== system.id || entry.userId !== user.id;
+  const hasPreservedQueueMovement = Boolean(entry.queueUserId || entry.queueSystemId);
+  const repairQueue = isLatestEntry && getAssignmentEditChecked(form, "repairQueue");
+  if ((queuePositionChanged || hasPreservedQueueMovement) && repairQueue) {
+    applyAssignmentQueueCorrection(entry, user, system, originalEntry);
+    editingAssignmentId = null;
+    lastAssignmentId = entry.id;
+    completeDataSave("Assignment updated. Queue corrected.", { showToast: true });
+    return;
+  }
+
   entry.systemId = system.id;
   entry.systemName = system.name;
+  entry.serviceNowConfigItem = String(system.serviceNowConfigItem || "").trim();
   entry.regionId = entryRegionId;
   entry.regionName = getRegionScopeLabel(entryRegionId);
   entry.userId = user.id;
   entry.userName = user.name;
   if (queuePositionChanged) {
+    const editedAt = new Date().toISOString();
     delete entry.queuePosition;
     delete entry.queuePositionLabel;
     delete entry.queuePositionType;
+    entry.assignmentEdit = {
+      type: "amended",
+      editedAt,
+      previousUserId: originalEntry.userId || "",
+      previousUserName: originalEntry.userName || "Removed user",
+      previousSystemId: originalEntry.systemId || "",
+      previousSystemName: originalEntry.systemName || "Removed system",
+      queueCorrected: false
+    };
+    if (isLatestEntry) {
+      entry.queueUserId = originalEntry.queueUserId || originalEntry.userId || "";
+      entry.queueSystemId = originalEntry.queueSystemId || originalEntry.systemId || "";
+    }
+    entry.amendedAt = editedAt;
+  } else {
+    entry.amendedAt = new Date().toISOString();
   }
-  entry.amendedAt = new Date().toISOString();
   editingAssignmentId = null;
   lastAssignmentId = entry.id;
   completeDataSave("Assignment updated.", { showToast: true });
@@ -3682,6 +3891,10 @@ function saveAmendedAssignment(event) {
 
 function getAssignmentEditValue(form, fieldName) {
   return form.querySelector(`[data-edit-field="${fieldName}"]`)?.value || "";
+}
+
+function getAssignmentEditChecked(form, fieldName) {
+  return Boolean(form.querySelector(`[data-edit-field="${fieldName}"]`)?.checked);
 }
 
 function deleteAssignment(assignmentId) {
@@ -7577,7 +7790,7 @@ function getRecentAssignments() {
   const cutoff = Date.now() - RECENT_ASSIGNMENTS_WINDOW_MS;
   return data.assignmentLog
     .filter((entry) => getAssignmentCreatedTimestamp(entry) >= cutoff)
-    .sort((left, right) => getAssignmentCreatedTimestamp(left) - getAssignmentCreatedTimestamp(right));
+    .sort((left, right) => getAssignmentCreatedTimestamp(right) - getAssignmentCreatedTimestamp(left));
 }
 
 function getAssignmentCreatedTimestamp(entry) {
@@ -8935,12 +9148,13 @@ function buildQueuePositionsFromAssignmentLog(assignments = data.assignmentLog, 
       const regionId = normalizeRegionScopeId(entry.regionId);
       const systems = getScopedSystems(regionId);
       const queues = regionId ? rebuiltRegionalQueues[regionId] : rebuiltQueues;
-      const system = systems.find((item) => isAssignmentForSystem(entry, item, regionId));
+      const queueEntry = getQueueMovementEntry(entry);
+      const system = systems.find((item) => isAssignmentForSystem(queueEntry, item, regionId));
       if (!system || system.primaryUserIds.length === 0) {
         return;
       }
 
-      const userIndex = system.primaryUserIds.indexOf(entry.userId);
+      const userIndex = system.primaryUserIds.indexOf(queueEntry.userId);
       if (userIndex >= 0) {
         queues[system.id] = (userIndex + 1) % system.primaryUserIds.length;
       }
@@ -8949,6 +9163,18 @@ function buildQueuePositionsFromAssignmentLog(assignments = data.assignmentLog, 
   return {
     global: rebuiltQueues,
     regional: rebuiltRegionalQueues
+  };
+}
+
+function getQueueMovementEntry(entry) {
+  if (!entry?.queueUserId && !entry?.queueSystemId) {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    userId: entry.queueUserId || entry.userId,
+    systemId: entry.queueSystemId || entry.systemId
   };
 }
 

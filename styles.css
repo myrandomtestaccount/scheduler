@@ -642,6 +642,19 @@ button:disabled {
   padding: 0.28rem 0.7rem;
 }
 
+.assignment-title-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.status-pill.edited {
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
+  color: var(--ink);
+}
+
 .incident-action-link {
   min-height: 2.45rem;
   padding: 0.6rem 1rem;
@@ -661,6 +674,26 @@ button:disabled {
 .service-now-incident-card textarea {
   height: 9rem;
   min-height: 7rem;
+}
+
+.assignment-edit-check {
+  align-items: center;
+  color: var(--ink);
+  display: inline-flex;
+  font-size: 0.86rem;
+  font-weight: 800;
+  gap: 0.45rem;
+  justify-self: start;
+}
+
+.assignment-edit-check input[type="checkbox"] {
+  accent-color: var(--primary);
+  flex: 0 0 auto;
+  height: 1rem;
+  margin: 0;
+  min-height: 0;
+  padding: 0;
+  width: 1rem;
 }
 
 .assignment-actions {
