@@ -13,8 +13,11 @@ const {
   MAX_SCHEDULE_DURATION_MINUTES,
   SLOT_MINUTES,
   addDays,
+  buildEasternScheduleFromDisplayTimes,
   compareDateTimeRecords,
   compareDateTimeValues,
+  convertWallTimeToEastern,
+  convertWallTimeToTimeZone,
   formatDate,
   formatDisplayDate,
   formatDurationMinutes,
@@ -4459,22 +4462,59 @@ function getGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day = get
     return [];
   }
 
-  if (!isScheduleActiveOnDate(schedule, date, day)) {
-    return [];
-  }
+  const startOffset = getScheduleStartDayOffset(schedule, user);
+  const endOffset = getScheduleEndDayOffset(schedule, user);
+  const candidateDates = Array.from(new Set([
+    formatDate(addDays(parseDate(date), -startOffset)),
+    formatDate(addDays(parseDate(date), -endOffset))
+  ]));
+  const blocks = [];
+  candidateDates.forEach((scheduleDate) => {
+    if (!isScheduleActiveOnDate(schedule, scheduleDate, getDayNameFromDate(scheduleDate))) {
+      return;
+    }
 
-  const sourceDate = getScheduleEndpointDate(date, schedule, "start", user);
-  const block = {
-    id: schedule.id,
-    source: "schedule",
-    date,
-    sourceDate,
-    removeDate: date,
-    start: schedule.start,
-    end: schedule.end
-  };
+    const startDate = getScheduleEndpointDate(scheduleDate, schedule, "start", user);
+    const endDate = getScheduleEndpointDate(scheduleDate, schedule, "end", user);
+    if (startDate === endDate && date === startDate) {
+      blocks.push({
+        id: schedule.id,
+        source: "schedule",
+        date,
+        sourceDate: startDate,
+        removeDate: scheduleDate,
+        start: schedule.start,
+        end: schedule.end
+      });
+      return;
+    }
 
-  return isGraphBlockVisible(block) ? [block] : [];
+    if (date === startDate) {
+      blocks.push({
+        id: schedule.id,
+        source: "schedule",
+        date,
+        sourceDate: startDate,
+        removeDate: scheduleDate,
+        start: schedule.start,
+        end: END_OF_DAY_TIME
+      });
+    }
+
+    if (date === endDate) {
+      blocks.push({
+        id: schedule.id,
+        source: "schedule",
+        date,
+        sourceDate: endDate,
+        removeDate: scheduleDate,
+        start: "00:00",
+        end: schedule.end
+      });
+    }
+  });
+
+  return blocks.filter((block) => isGraphBlockVisible(block));
 }
 
 function compareGraphBlocks(left, right) {
@@ -5863,17 +5903,13 @@ function addSchedule(event) {
   }
 
   const date = getScheduleReferenceDate();
-  const convertedStart = convertDisplayDateTimeToEastern(date, displayStart);
-  const convertedEnd = convertDisplayDateTimeToEastern(date, displayEnd);
-  if (!isValidScheduleTimeRange(convertedStart.time, convertedEnd.time)) {
+  const convertedSchedule = buildEasternScheduleFromDisplayTimes(date, displayStart, displayEnd, getSelectedDisplayTimezone().timeZone);
+  if (!isValidScheduleTimeRange(convertedSchedule.start, convertedSchedule.end)) {
     showGenericAlert("Invalid time", "Schedule duration must be 12 hours or less in Eastern Time.");
     return;
   }
 
-  const start = convertedStart.time;
-  const end = convertedEnd.time;
-  const startDayOffset = getDateOffset(date, convertedStart.date);
-  const endDayOffset = getDateOffset(date, convertedEnd.date);
+  const { start, end, startDayOffset, endDayOffset } = convertedSchedule;
   const dateRange = getScheduleDateRangeFromForm();
   if (!dateRange) {
     return;
@@ -9981,17 +10017,11 @@ function formatTimeInputForDisplay(date, time, sourceTimeZone = EASTERN_TIME_ZON
     return time || "";
   }
 
-  const instant = zonedWallTimeToDate(date, time, sourceTimeZone);
-  return getZonedDateTimeParts(instant, getSelectedDisplayTimezone().timeZone).time;
+  return convertWallTimeToTimeZone(date, time, sourceTimeZone, getSelectedDisplayTimezone().timeZone).time;
 }
 
 function convertDisplayDateTimeToEastern(date, time, timezone = getSelectedDisplayTimezone()) {
-  if (!isValidDateInput(date) || !isValidTimeInput(time)) {
-    return { date, time };
-  }
-
-  const instant = zonedWallTimeToDate(date, time, timezone.timeZone);
-  return getZonedDateTimeParts(instant, EASTERN_TIME_ZONE);
+  return convertWallTimeToEastern(date, time, timezone.timeZone);
 }
 
 function formatDisplayClock(easternNow, timezone) {

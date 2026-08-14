@@ -316,6 +316,32 @@
     return new Date(timestamp);
   }
 
+  function convertWallTimeToTimeZone(date, time, sourceTimeZone, targetTimeZone) {
+    if (!isValidDateInput(date || "") || !isValidTimeInput(time || "")) {
+      return { date, time };
+    }
+
+    const instant = zonedWallTimeToDate(date, time, sourceTimeZone);
+    return getZonedDateTimeParts(instant, targetTimeZone);
+  }
+
+  function convertWallTimeToEastern(date, time, sourceTimeZone) {
+    return convertWallTimeToTimeZone(date, time, sourceTimeZone, EASTERN_TIME_ZONE);
+  }
+
+  function buildEasternScheduleFromDisplayTimes(date, start, end, sourceTimeZone) {
+    const convertedStart = convertWallTimeToEastern(date, start, sourceTimeZone);
+    const convertedEnd = convertWallTimeToEastern(date, end, sourceTimeZone);
+    return {
+      start: convertedStart.time,
+      end: convertedEnd.time,
+      startDate: convertedStart.date,
+      endDate: convertedEnd.date,
+      startDayOffset: getDateOffset(date, convertedStart.date),
+      endDayOffset: getDateOffset(date, convertedEnd.date)
+    };
+  }
+
   return {
     EASTERN_TIME_ZONE,
     END_OF_DAY_TIME,
@@ -323,8 +349,11 @@
     MAX_SCHEDULE_DURATION_MINUTES,
     SLOT_MINUTES,
     addDays,
+    buildEasternScheduleFromDisplayTimes,
     compareDateTimeRecords,
     compareDateTimeValues,
+    convertWallTimeToEastern,
+    convertWallTimeToTimeZone,
     formatDate,
     formatDisplayDate,
     formatDurationMinutes,

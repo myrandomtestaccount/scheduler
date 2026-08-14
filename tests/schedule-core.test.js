@@ -51,6 +51,82 @@ test("converts Eastern wall time into India display time", () => {
   });
 });
 
+test("stores display-zone schedules as Eastern time consistently", () => {
+  const cases = [
+    {
+      name: "London BST",
+      timeZone: "Europe/London",
+      date: "2026-08-13",
+      start: "09:00",
+      end: "17:00",
+      expected: { start: "04:00", end: "12:00", startDayOffset: 0, endDayOffset: 0 }
+    },
+    {
+      name: "UTC",
+      timeZone: "UTC",
+      date: "2026-08-13",
+      start: "09:00",
+      end: "17:00",
+      expected: { start: "05:00", end: "13:00", startDayOffset: 0, endDayOffset: 0 }
+    },
+    {
+      name: "Paris CEST",
+      timeZone: "Europe/Paris",
+      date: "2026-08-13",
+      start: "09:00",
+      end: "17:00",
+      expected: { start: "03:00", end: "11:00", startDayOffset: 0, endDayOffset: 0 }
+    },
+    {
+      name: "India IST",
+      timeZone: "Asia/Kolkata",
+      date: "2026-08-13",
+      start: "09:00",
+      end: "17:00",
+      expected: { start: "23:30", end: "07:30", startDayOffset: -1, endDayOffset: 0 }
+    },
+    {
+      name: "Tokyo JST",
+      timeZone: "Asia/Tokyo",
+      date: "2026-08-13",
+      start: "09:00",
+      end: "17:00",
+      expected: { start: "20:00", end: "04:00", startDayOffset: -1, endDayOffset: 0 }
+    },
+    {
+      name: "Sydney AEST",
+      timeZone: "Australia/Sydney",
+      date: "2026-08-13",
+      start: "09:00",
+      end: "17:00",
+      expected: { start: "19:00", end: "03:00", startDayOffset: -1, endDayOffset: 0 }
+    },
+    {
+      name: "Pacific PDT",
+      timeZone: "America/Los_Angeles",
+      date: "2026-08-13",
+      start: "09:00",
+      end: "17:00",
+      expected: { start: "12:00", end: "20:00", startDayOffset: 0, endDayOffset: 0 }
+    }
+  ];
+
+  cases.forEach(({ name, timeZone, date, start, end, expected }) => {
+    const stored = core.buildEasternScheduleFromDisplayTimes(date, start, end, timeZone);
+    assert.deepEqual({
+      start: stored.start,
+      end: stored.end,
+      startDayOffset: stored.startDayOffset,
+      endDayOffset: stored.endDayOffset
+    }, expected, name);
+
+    const roundTripStart = core.convertWallTimeToTimeZone(stored.startDate, stored.start, core.EASTERN_TIME_ZONE, timeZone);
+    const roundTripEnd = core.convertWallTimeToTimeZone(stored.endDate, stored.end, core.EASTERN_TIME_ZONE, timeZone);
+    assert.deepEqual({ date: roundTripStart.date, time: roundTripStart.time }, { date, time: start }, `${name} start round-trip`);
+    assert.deepEqual({ date: roundTripEnd.date, time: roundTripEnd.time }, { date, time: end }, `${name} end round-trip`);
+  });
+});
+
 test("uses date-specific daylight saving abbreviations", () => {
   const london = { id: "london", timeZone: "Europe/London" };
   const prague = { id: "paris", timeZone: "Europe/Prague" };

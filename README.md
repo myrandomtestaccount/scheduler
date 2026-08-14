@@ -81,7 +81,8 @@ npm run check
 - Overnight graph labels: schedules stay in one range; `T-1` marks true previous-day starts and `T+1` marks true next-day endings relative to the visible graph date.
 - Graph prefill: day-view schedule blocks can prefill the schedule form for quicker edits.
 - Forward-time validation: schedule, slot, shift, and delegation ranges must run from older to newer times.
-- Eastern source of truth: saved schedule times are interpreted in `America/New_York`.
+- Eastern source of truth: saved schedule times are stored in `America/New_York`.
+- Timezone-aware schedule entry: schedule form times use the currently selected clock timezone and convert to Eastern on save.
 - Display time zones: admins can choose which time zones appear in the main clock selector.
 - Timezone labels: configured display zones use friendly acronyms such as `JST/KST`, `CET`, and `AEST/AEDT` instead of browser `GMT+offset` fallbacks where possible.
 - Main clock selector: users can switch the displayed time zone without changing stored schedule data.
@@ -225,7 +226,7 @@ Incident templates support `{{assignee}}`, `{{assignee_mention}}`, `{{coverage}}
 
 ## Eastern Time Scheduling
 
-All schedule times are interpreted in `America/New_York` time. The UI labels this as Eastern Time because the actual offset changes between EST and EDT during the year.
+Saved schedule times use `America/New_York` as the canonical storage timezone. Admin form labels follow the currently selected clock timezone, so entering `09:00` while London is selected saves the equivalent Eastern time instead of treating that input as EDT. The UI labels Eastern as Eastern Time because the actual offset changes between EST and EDT during the year.
 
 Recommendation sorting can use available per-system SME order, schedule start time, total tickets assigned today, and current same-user assignment streak.
 
