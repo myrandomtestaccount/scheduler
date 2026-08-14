@@ -25,6 +25,7 @@ const {
   getBusinessWeekRange,
   getDateOffset,
   getDayNameFromDate,
+  getScheduleSegmentsForDate,
   getTimeRangeDurationMinutes,
   getTimezoneAbbreviation,
   getWeekDates,
@@ -4458,63 +4459,9 @@ function getGraphScheduleBlocksForDate(user, date, day = getDayNameFromDate(date
 }
 
 function getGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date)) {
-  if (!isValidScheduleTimeRange(schedule.start, schedule.end)) {
-    return [];
-  }
-
-  const startOffset = getScheduleStartDayOffset(schedule, user);
-  const endOffset = getScheduleEndDayOffset(schedule, user);
-  const candidateDates = Array.from(new Set([
-    formatDate(addDays(parseDate(date), -startOffset)),
-    formatDate(addDays(parseDate(date), -endOffset))
-  ]));
-  const blocks = [];
-  candidateDates.forEach((scheduleDate) => {
-    if (!isScheduleActiveOnDate(schedule, scheduleDate, getDayNameFromDate(scheduleDate))) {
-      return;
-    }
-
-    const startDate = getScheduleEndpointDate(scheduleDate, schedule, "start", user);
-    const endDate = getScheduleEndpointDate(scheduleDate, schedule, "end", user);
-    if (startDate === endDate && date === startDate) {
-      blocks.push({
-        id: schedule.id,
-        source: "schedule",
-        date,
-        sourceDate: startDate,
-        removeDate: scheduleDate,
-        start: schedule.start,
-        end: schedule.end
-      });
-      return;
-    }
-
-    if (date === startDate) {
-      blocks.push({
-        id: schedule.id,
-        source: "schedule",
-        date,
-        sourceDate: startDate,
-        removeDate: scheduleDate,
-        start: schedule.start,
-        end: END_OF_DAY_TIME
-      });
-    }
-
-    if (date === endDate) {
-      blocks.push({
-        id: schedule.id,
-        source: "schedule",
-        date,
-        sourceDate: endDate,
-        removeDate: scheduleDate,
-        start: "00:00",
-        end: schedule.end
-      });
-    }
-  });
-
-  return blocks.filter((block) => isGraphBlockVisible(block));
+  return getScheduleSegmentsForDate(schedule, date, {
+    inferredStartDayOffset: getInferredScheduleStartDayOffset(schedule, user)
+  }).filter((block) => isGraphBlockVisible(block));
 }
 
 function compareGraphBlocks(left, right) {
@@ -8055,57 +8002,9 @@ function getScheduleWindowsForDate(user, date, day) {
 }
 
 function getScheduleWindowsForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date)) {
-  if (!isValidScheduleTimeRange(schedule.start, schedule.end)) {
-    return [];
-  }
-
-  const startOffset = getScheduleStartDayOffset(schedule, user);
-  const endOffset = getScheduleEndDayOffset(schedule, user);
-  const candidateDates = Array.from(new Set([
-    formatDate(addDays(parseDate(date), -startOffset)),
-    formatDate(addDays(parseDate(date), -endOffset))
-  ]));
-  const windows = [];
-  candidateDates.forEach((scheduleDate) => {
-    if (!isScheduleActiveOnDate(schedule, scheduleDate, getDayNameFromDate(scheduleDate))) {
-      return;
-    }
-
-    const startDate = getScheduleEndpointDate(scheduleDate, schedule, "start", user);
-    const endDate = getScheduleEndpointDate(scheduleDate, schedule, "end", user);
-    if (startDate === endDate && date === startDate) {
-      windows.push({
-        id: schedule.id,
-        source: "schedule",
-        start: schedule.start,
-        end: schedule.end,
-        removeDate: scheduleDate
-      });
-      return;
-    }
-
-    if (date === startDate) {
-      windows.push({
-        id: schedule.id,
-        source: "schedule",
-        start: schedule.start,
-        end: END_OF_DAY_TIME,
-        removeDate: scheduleDate
-      });
-    }
-
-    if (date === endDate) {
-      windows.push({
-        id: schedule.id,
-        source: "schedule",
-        start: "00:00",
-        end: schedule.end,
-        removeDate: scheduleDate
-      });
-    }
+  return getScheduleSegmentsForDate(schedule, date, {
+    inferredStartDayOffset: getInferredScheduleStartDayOffset(schedule, user)
   });
-
-  return windows;
 }
 
 function getScheduleEndpointDate(date, schedule, endpoint, user = null) {

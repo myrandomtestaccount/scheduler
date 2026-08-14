@@ -330,8 +330,11 @@
   }
 
   function buildEasternScheduleFromDisplayTimes(date, start, end, sourceTimeZone) {
+    const endSourceDate = isValidDateInput(date || "") && isValidTimeInput(start || "") && isValidTimeInput(end || "") && toMinutes(end) <= toMinutes(start)
+      ? formatDate(addDays(parseDate(date), 1))
+      : date;
     const convertedStart = convertWallTimeToEastern(date, start, sourceTimeZone);
-    const convertedEnd = convertWallTimeToEastern(date, end, sourceTimeZone);
+    const convertedEnd = convertWallTimeToEastern(endSourceDate, end, sourceTimeZone);
     return {
       start: convertedStart.time,
       end: convertedEnd.time,
@@ -340,6 +343,106 @@
       startDayOffset: getDateOffset(date, convertedStart.date),
       endDayOffset: getDateOffset(date, convertedEnd.date)
     };
+  }
+
+  function getScheduleStartDate(schedule) {
+    return isValidDateInput(schedule?.startDate || "") ? schedule.startDate : "0001-01-01";
+  }
+
+  function getScheduleEndDate(schedule) {
+    return isValidDateInput(schedule?.endDate || "") ? schedule.endDate : "9999-12-31";
+  }
+
+  function isScheduleActiveOnDate(schedule, date, day = getDayNameFromDate(date)) {
+    return Array.isArray(schedule?.days)
+      && schedule.days.includes(day)
+      && getScheduleStartDate(schedule) <= date
+      && date <= getScheduleEndDate(schedule);
+  }
+
+  function getNormalizedScheduleDayOffset(value, fallback = 0) {
+    const number = Number(value);
+    return Number.isInteger(number) && number >= -1 && number <= 1
+      ? number
+      : fallback;
+  }
+
+  function getScheduleStartDayOffset(schedule, inferredStartDayOffset = 0) {
+    return getNormalizedScheduleDayOffset(schedule?.startDayOffset, inferredStartDayOffset);
+  }
+
+  function getScheduleEndDayOffset(schedule, inferredStartDayOffset = 0) {
+    const startDayOffset = getScheduleStartDayOffset(schedule, inferredStartDayOffset);
+    const fallbackEndOffset = startDayOffset + (toMinutes(schedule?.end || "") <= toMinutes(schedule?.start || "") ? 1 : 0);
+    return getNormalizedScheduleDayOffset(schedule?.endDayOffset, fallbackEndOffset);
+  }
+
+  function getScheduleEndpointDate(date, schedule, endpoint, inferredStartDayOffset = 0) {
+    const offset = endpoint === "start"
+      ? getScheduleStartDayOffset(schedule, inferredStartDayOffset)
+      : getScheduleEndDayOffset(schedule, inferredStartDayOffset);
+    return formatDate(addDays(parseDate(date), offset));
+  }
+
+  function getScheduleSegmentsForDate(schedule, date, options = {}) {
+    if (!isValidScheduleTimeRange(schedule?.start, schedule?.end)) {
+      return [];
+    }
+
+    const inferredStartDayOffset = options.inferredStartDayOffset ?? 0;
+    const startOffset = getScheduleStartDayOffset(schedule, inferredStartDayOffset);
+    const endOffset = getScheduleEndDayOffset(schedule, inferredStartDayOffset);
+    const candidateDates = Array.from(new Set([
+      formatDate(addDays(parseDate(date), -startOffset)),
+      formatDate(addDays(parseDate(date), -endOffset))
+    ]));
+    const segments = [];
+    candidateDates.forEach((scheduleDate) => {
+      if (!isScheduleActiveOnDate(schedule, scheduleDate, getDayNameFromDate(scheduleDate))) {
+        return;
+      }
+
+      const startDate = getScheduleEndpointDate(scheduleDate, schedule, "start", inferredStartDayOffset);
+      const endDate = getScheduleEndpointDate(scheduleDate, schedule, "end", inferredStartDayOffset);
+      if (startDate === endDate && date === startDate) {
+        segments.push({
+          id: schedule.id,
+          source: "schedule",
+          date,
+          sourceDate: startDate,
+          removeDate: scheduleDate,
+          start: schedule.start,
+          end: schedule.end
+        });
+        return;
+      }
+
+      if (date === startDate) {
+        segments.push({
+          id: schedule.id,
+          source: "schedule",
+          date,
+          sourceDate: startDate,
+          removeDate: scheduleDate,
+          start: schedule.start,
+          end: END_OF_DAY_TIME
+        });
+      }
+
+      if (date === endDate) {
+        segments.push({
+          id: schedule.id,
+          source: "schedule",
+          date,
+          sourceDate: endDate,
+          removeDate: scheduleDate,
+          start: "00:00",
+          end: schedule.end
+        });
+      }
+    });
+
+    return segments;
   }
 
   return {
@@ -361,6 +464,13 @@
     getBusinessWeekRange,
     getDateOffset,
     getDayNameFromDate,
+    getNormalizedScheduleDayOffset,
+    getScheduleEndDate,
+    getScheduleEndDayOffset,
+    getScheduleEndpointDate,
+    getScheduleSegmentsForDate,
+    getScheduleStartDate,
+    getScheduleStartDayOffset,
     getTimeRangeDurationMinutes,
     getTimeZoneOffsetMinutes,
     getTimezoneAbbreviation,
@@ -370,6 +480,7 @@
     isForwardDateTimeRange,
     isForwardTimeRange,
     isSameDayForwardEasternRange,
+    isScheduleActiveOnDate,
     isValidDateInput,
     isValidRegionCoverageTimeRange,
     isValidScheduleTimeRange,
