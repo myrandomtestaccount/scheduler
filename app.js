@@ -22,10 +22,12 @@ const {
   formatDisplayDate,
   formatDurationMinutes,
   formatWaitDuration,
+  getAllDayOooGraphRange,
   getBusinessWeekRange,
   getDateOffset,
   getDayNameFromDate,
   getScheduleSegmentsForDate,
+  getTimedOooSourceDatesForGraph,
   getTimeRangeDurationMinutes,
   getTimezoneAbbreviation,
   getWeekDates,
@@ -4323,6 +4325,11 @@ function getGraphSourceDatesForRange(date, graphRange = getScheduleGraphTimeRang
   );
 }
 
+function getAllDayOooCoverageWindowForGraph(regionId = selectedAdminRegionId) {
+  const normalizedRegionId = normalizeRegionScopeId(regionId);
+  return normalizedRegionId ? getRegionCoverageWindow(normalizedRegionId) : null;
+}
+
 function renderWeekScheduleGraph(date) {
   timelineDrafts = [];
   renderTimelineDraftActions();
@@ -4337,7 +4344,7 @@ function renderWeekScheduleGraph(date) {
   const rows = getSortedGraphUserRowsForWeek(weekDates).map(({ user }) => {
     const cells = weekDates.map((weekDate) => {
       const day = getDayNameFromDate(weekDate);
-      const blocks = getGraphBlocksForUser(user, weekDate, day)
+      const blocks = getGraphBlocksForUser(user, weekDate, day, { view: "week" })
         .map((block) => weekGraphPill(block))
         .join("");
 
@@ -4375,14 +4382,14 @@ function getScheduleGraphEmptyMessage() {
   return "Add users before viewing schedules.";
 }
 
-function getGraphBlocksForUser(user, date, day) {
+function getGraphBlocksForUser(user, date, day, options = {}) {
   const holidays = getHolidaysForUser(user.id, date, selectedAdminRegionId);
   if (holidays.length > 0) {
-    const graphRange = getScheduleGraphTimeRange();
+    const graphRange = getAllDayOooGraphRange(getAllDayOooCoverageWindowForGraph());
     return [{
       type: "holiday",
-      start: graphRange.startTime,
-      end: graphRange.endTime,
+      start: graphMinutesToTime(graphRange.start),
+      end: graphMinutesToTime(graphRange.end),
       date,
       graphStartMinutes: graphRange.start,
       graphEndMinutes: graphRange.end,
@@ -4391,6 +4398,8 @@ function getGraphBlocksForUser(user, date, day) {
   }
 
   const sourceDates = getGraphSourceDatesForRange(date);
+  const graphView = options.view || elements.scheduleViewSelect?.value || "week";
+  const timedOooSourceDates = getTimedOooSourceDatesForGraph(date, getScheduleGraphTimeRange(), graphView);
   const scheduleBlocks = getGraphScheduleBlocksForDate(user, date, day)
     .map((window) => ({
       type: "schedule",
@@ -4434,7 +4443,7 @@ function getGraphBlocksForUser(user, date, day) {
     }))
     .filter((block) => isGraphBlockVisible(block));
 
-  const oooBreakBlocks = sourceDates
+  const oooBreakBlocks = timedOooSourceDates
     .flatMap((sourceDate) => getTimedOooBlocksForUser(user.id, sourceDate, selectedAdminRegionId))
     .map((holiday) => ({
       type: "break",
@@ -4474,7 +4483,7 @@ function getSortedGraphUserRowsForDate(date) {
   const day = getDayNameFromDate(date);
   return getRankedUsersForRegionScope(selectedAdminRegionId)
     .map((user, index) => {
-      const graphBlocks = getGraphBlocksForUser(user, date, day);
+      const graphBlocks = getGraphBlocksForUser(user, date, day, { view: "day" });
       return {
         user,
         index,
@@ -4491,7 +4500,7 @@ function getSortedGraphUserRowsForWeek(weekDates) {
       user,
       index,
       sortKey: weekDates
-        .map((weekDate) => getGraphSortKey(getGraphBlocksForUser(user, weekDate, getDayNameFromDate(weekDate))))
+        .map((weekDate) => getGraphSortKey(getGraphBlocksForUser(user, weekDate, getDayNameFromDate(weekDate), { view: "week" })))
         .sort(compareGraphSortKeys)[0] || emptyGraphSortKey()
     }))
     .sort(compareGraphUserRows);

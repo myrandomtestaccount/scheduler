@@ -445,6 +445,40 @@
     return segments;
   }
 
+  function getAllDayOooGraphRange(coverageWindow = null) {
+    if (!coverageWindow || !isValidTimeInput(coverageWindow.start || "") || !isValidTimeInput(coverageWindow.end || "")) {
+      return {
+        start: 0,
+        end: 24 * 60,
+        duration: 24 * 60
+      };
+    }
+
+    const startMinutes = toMinutes(coverageWindow.start);
+    const endMinutes = toMinutes(coverageWindow.end);
+    const start = endMinutes <= startMinutes ? startMinutes - 24 * 60 : startMinutes;
+    return {
+      start,
+      end: endMinutes,
+      duration: endMinutes - start
+    };
+  }
+
+  function getGraphSourceDatesForRange(date, graphRange) {
+    const startOffset = Math.floor(graphRange.start / (24 * 60));
+    const endOffset = Math.ceil(graphRange.end / (24 * 60)) - 1;
+    return Array.from(
+      { length: Math.max(endOffset - startOffset + 1, 1) },
+      (_, index) => formatDate(addDays(parseDate(date), startOffset + index))
+    );
+  }
+
+  function getTimedOooSourceDatesForGraph(date, graphRange, view = "day") {
+    return view === "week"
+      ? [date]
+      : getGraphSourceDatesForRange(date, graphRange);
+  }
+
   return {
     EASTERN_TIME_ZONE,
     END_OF_DAY_TIME,
@@ -464,6 +498,8 @@
     getBusinessWeekRange,
     getDateOffset,
     getDayNameFromDate,
+    getAllDayOooGraphRange,
+    getGraphSourceDatesForRange,
     getNormalizedScheduleDayOffset,
     getScheduleEndDate,
     getScheduleEndDayOffset,
@@ -471,6 +507,7 @@
     getScheduleSegmentsForDate,
     getScheduleStartDate,
     getScheduleStartDayOffset,
+    getTimedOooSourceDatesForGraph,
     getTimeRangeDurationMinutes,
     getTimeZoneOffsetMinutes,
     getTimezoneAbbreviation,

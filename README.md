@@ -32,7 +32,7 @@ For syntax checks plus logic tests:
 npm run check
 ```
 
-The schedule suite covers popular time zones, DST boundary weeks, host-machine timezone independence, local overnight schedules, and graph/queue date-segment splitting.
+The schedule suite covers popular time zones, DST boundary weeks, host-machine timezone independence, local overnight schedules, graph/queue date-segment splitting, and OOO graph day/range behavior.
 
 ## Functionality Reference
 
@@ -243,6 +243,7 @@ styles.css
 app.js
 src/schedule-core.js
 tests/schedule-core.test.js
+tests/ooo-graph.test.js
 tests/schedule-environment.test.js
 tests/schedule-segments.test.js
 tests/schedule-timezone-regression.test.js
