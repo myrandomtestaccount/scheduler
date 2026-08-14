@@ -1,6 +1,21 @@
 {
   "scripts": {
     "test": "node tests/schedule-core.test.js",
-    "check": "node --check src/schedule-core.js && node --check app.js && node --check server.js && node tests/schedule-core.test.js"
+    "check": "node --check src/schedule-core.js && node --check app.js && node --check server.js && node tests/schedule-core.test.js && npm run check:react",
+    "dev:react": "vite --host 0.0.0.0",
+    "build:react": "tsc --noEmit && vite build",
+    "check:react": "tsc --noEmit && vite build",
+    "preview:react": "vite preview --outDir dist-react"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1"
   }
 }

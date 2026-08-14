@@ -7,3 +7,6 @@ obj/
 *.suo
 *.log
 config/
+node_modules/
+dist/
+dist-react/

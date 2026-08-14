@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SME Scheduler React Migration</title>
+    <script>
+      (() => {
+        const themeKey = "scheduler.theme.v1";
+        const savedTheme = localStorage.getItem(themeKey);
+        const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme = savedTheme === "dark" || savedTheme === "light" ? savedTheme : prefersDark ? "dark" : "light";
+      })();
+    </script>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div id="react-root"></div>
+    <script type="module" src="/src/react/main.tsx"></script>
+  </body>
+</html>
