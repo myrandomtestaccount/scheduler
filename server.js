@@ -200,9 +200,10 @@ async function readStateFile() {
 async function writeStateFile(data) {
   await fs.mkdir(configDir, { recursive: true });
   const stateParts = splitSchedulerState(data);
+  const backupSnapshotsEnabled = areBackupSnapshotsEnabled(data);
   const [savedConfig, savedActivity] = await Promise.all([
-    writeJsonDataFile(configFile, "scheduler-config", stateParts.config),
-    writeJsonDataFile(activityFile, "scheduler-activity", stateParts.activity)
+    writeJsonDataFile(configFile, "scheduler-config", stateParts.config, backupSnapshotsEnabled),
+    writeJsonDataFile(activityFile, "scheduler-activity", stateParts.activity, backupSnapshotsEnabled)
   ]);
   try {
     await cleanupBackupSnapshots(getBackupSnapshotRetentionDays(data));
@@ -228,10 +229,10 @@ async function readCurrentFileText(filePath) {
   }
 }
 
-async function writeJsonDataFile(filePath, snapshotName, data) {
+async function writeJsonDataFile(filePath, snapshotName, data, backupSnapshotsEnabled = false) {
   const text = `${JSON.stringify(data, null, 2)}\n`;
   const currentText = await readCurrentFileText(filePath);
-  const backupPath = currentText && hashText(currentText) !== hashText(text)
+  const backupPath = backupSnapshotsEnabled && currentText && hashText(currentText) !== hashText(text)
     ? await writeBackupSnapshot(currentText, snapshotName)
     : null;
   const tempFile = path.join(configDir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
@@ -420,6 +421,11 @@ function getBackupSnapshotRetentionDays(data) {
   }
 
   return Math.min(Math.max(parsedValue, 1), 3650);
+}
+
+function areBackupSnapshotsEnabled(data) {
+  return data?.retentionPolicy?.backupSnapshotsEnabled === true
+    || data?.retentionPolicy?.snapshotsEnabled === true;
 }
 
 function formatBackupDateStamp(date = new Date()) {

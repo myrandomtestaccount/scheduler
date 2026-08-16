@@ -502,6 +502,14 @@
                 <span>Keep delegations (days)</span>
                 <input id="delegationRetentionDaysInput" type="number" min="1" max="3650" step="1" required>
               </label>
+              <div class="region-mode-row">
+                <span class="item-title">Enable JSON snapshots</span>
+                <label class="toggle-switch">
+                  <input id="backupSnapshotsEnabledInput" type="checkbox">
+                  <span class="toggle-slider" aria-hidden="true"></span>
+                  <span id="backupSnapshotsEnabledLabel">No</span>
+                </label>
+              </div>
               <label class="field">
                 <span>Keep JSON snapshots (days)</span>
                 <input id="backupRetentionDaysInput" type="number" min="1" max="3650" step="1" required>

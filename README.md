@@ -176,7 +176,7 @@ On macOS, Windows, and Linux this folder lives inside the scheduler project dire
 
 New saves use only these two split files in `config` unless `--config-dir` or `SCHEDULER_CONFIG_DIR` is set.
 
-Shared mode also writes dated JSON snapshots before overwriting existing data:
+Shared mode can optionally write dated JSON snapshots before overwriting existing data. Enable this in Admin → Data maintenance → Retention policy:
 
 ```text
 config/backups/scheduler-config-MMDDYYYY_01.json
@@ -244,6 +244,7 @@ app.js
 src/schedule-core.js
 tests/schedule-core.test.js
 tests/ooo-graph.test.js
+tests/server-snapshots.test.js
 tests/schedule-environment.test.js
 tests/schedule-segments.test.js
 tests/schedule-timezone-regression.test.js

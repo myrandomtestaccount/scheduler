@@ -102,6 +102,7 @@ const DEFAULT_RETENTION_POLICY = {
   assignmentLogDays: 365,
   oooDays: 180,
   delegationDays: 365,
+  backupSnapshotsEnabled: false,
   backupSnapshotDays: 90
 };
 const CONFIG_JSON_ROOT_FIELDS = [
@@ -790,6 +791,8 @@ const elements = {
   assignmentRetentionDaysInput: document.querySelector("#assignmentRetentionDaysInput"),
   oooRetentionDaysInput: document.querySelector("#oooRetentionDaysInput"),
   delegationRetentionDaysInput: document.querySelector("#delegationRetentionDaysInput"),
+  backupSnapshotsEnabledInput: document.querySelector("#backupSnapshotsEnabledInput"),
+  backupSnapshotsEnabledLabel: document.querySelector("#backupSnapshotsEnabledLabel"),
   backupRetentionDaysInput: document.querySelector("#backupRetentionDaysInput"),
   exportButton: document.querySelector("#exportButton"),
   importInput: document.querySelector("#importInput"),
@@ -988,6 +991,7 @@ function bindEvents() {
   on(elements.shiftStartInput, "input", updateForwardTimeInputConstraints);
   on(elements.shiftEndInput, "input", updateForwardTimeInputConstraints);
   on(elements.retentionPolicyForm, "submit", saveRetentionPolicy);
+  on(elements.backupSnapshotsEnabledInput, "change", updateBackupSnapshotsEnabledControlState);
   on(elements.exportButton, "click", exportData);
   on(elements.importInput, "change", importData);
   on(elements.resetButton, "click", resetData);
@@ -5034,7 +5038,21 @@ function renderRetentionPolicy() {
   setRetentionInputValue(elements.assignmentRetentionDaysInput, policy.assignmentLogDays);
   setRetentionInputValue(elements.oooRetentionDaysInput, policy.oooDays);
   setRetentionInputValue(elements.delegationRetentionDaysInput, policy.delegationDays);
+  if (elements.backupSnapshotsEnabledInput && document.activeElement !== elements.backupSnapshotsEnabledInput) {
+    elements.backupSnapshotsEnabledInput.checked = policy.backupSnapshotsEnabled;
+  }
+  updateBackupSnapshotsEnabledControlState();
   setRetentionInputValue(elements.backupRetentionDaysInput, policy.backupSnapshotDays);
+}
+
+function updateBackupSnapshotsEnabledControlState() {
+  const isEnabled = elements.backupSnapshotsEnabledInput?.checked === true;
+  if (elements.backupSnapshotsEnabledLabel) {
+    elements.backupSnapshotsEnabledLabel.textContent = isEnabled ? "Yes" : "No";
+  }
+  if (elements.backupRetentionDaysInput) {
+    elements.backupRetentionDaysInput.disabled = !isEnabled;
+  }
 }
 
 function setRetentionInputValue(input, value) {
@@ -5061,6 +5079,7 @@ function readRetentionPolicyForm() {
     assignmentLogDays: elements.assignmentRetentionDaysInput?.value || current.assignmentLogDays,
     oooDays: elements.oooRetentionDaysInput?.value || current.oooDays,
     delegationDays: elements.delegationRetentionDaysInput?.value || current.delegationDays,
+    backupSnapshotsEnabled: elements.backupSnapshotsEnabledInput?.checked === true,
     backupSnapshotDays: elements.backupRetentionDaysInput?.value || current.backupSnapshotDays
   });
 }
@@ -8775,6 +8794,7 @@ function normalizeRetentionPolicy(policy) {
       source.delegationDays ?? source.delegationHistoryDays,
       DEFAULT_RETENTION_POLICY.delegationDays
     ),
+    backupSnapshotsEnabled: source.backupSnapshotsEnabled === true || source.snapshotsEnabled === true,
     backupSnapshotDays: normalizeRetentionDayCount(
       source.backupSnapshotDays ?? source.backupDays ?? source.snapshotDays,
       DEFAULT_RETENTION_POLICY.backupSnapshotDays
