@@ -17,7 +17,7 @@ const {
   compareDateTimeRecords,
   compareDateTimeValues,
   convertWallTimeToEastern,
-  convertWallTimeToTimeZone,
+  convertWallTimeToTimeZone: convertWallTimeToTimeZoneCore,
   formatDate,
   formatDisplayDate,
   formatDurationMinutes,
@@ -49,6 +49,19 @@ const {
   toMinutes,
   zonedWallTimeToDate
 } = window.ScheduleCore;
+
+function convertWallTimeToTimeZone(date, time, sourceTimeZone, targetTimeZone) {
+  if (typeof convertWallTimeToTimeZoneCore === "function") {
+    return convertWallTimeToTimeZoneCore(date, time, sourceTimeZone, targetTimeZone);
+  }
+
+  if (!isValidDateInput(date || "") || !isValidTimeInput(time || "")) {
+    return { date, time };
+  }
+
+  return getZonedDateTimeParts(zonedWallTimeToDate(date, time, sourceTimeZone), targetTimeZone);
+}
+
 const GLOBAL_HOLIDAY_USER_ID = "__all__";
 const REGION_HOLIDAY_USER_PREFIX = "__region_all__:";
 const SHIFT_TEMPLATE_SCOPE_SEPARATOR = "::";
