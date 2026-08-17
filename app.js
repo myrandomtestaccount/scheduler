@@ -9773,7 +9773,7 @@ function formatGraphEndpointPartLabel(parts, showDayOffset = true, anchorDayOffs
 }
 
 function shouldShowGraphDayOffsets(startParts, endParts) {
-  return startParts.dayOffset !== endParts.dayOffset;
+  return startParts.dayOffset !== 0 || endParts.dayOffset !== 0;
 }
 
 function getGraphDayOffsetAnchor(startParts, endParts, showDayOffsets) {
@@ -9803,8 +9803,8 @@ function formatGraphDayOffsetLabel(offset) {
     return "";
   }
 
-  const marker = offset > 0 ? `+${offset}` : `‑${Math.abs(offset)}`;
-  return ` (T${marker})`;
+  const marker = offset > 0 ? `+${offset}` : `-${Math.abs(offset)}`;
+  return ` (t${marker})`;
 }
 
 function timeRangeStyle(block) {
