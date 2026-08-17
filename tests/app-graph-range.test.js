@@ -81,16 +81,55 @@ function runRange(start, end) {
   }));
 }
 
-test("overnight APAC graph range starts on the selected date", () => {
+function runVisibleBlock(block, graphRange) {
+  const context = {
+    block,
+    graphRange,
+    result: null,
+    getDateOffset: core.getDateOffset,
+    toMinutes: core.toMinutes,
+    addDays: core.addDays,
+    parseDate: core.parseDate,
+    formatDate: core.formatDate,
+    isValidTimeInput: core.isValidTimeInput,
+    getScheduleReferenceDate: () => "2026-08-17"
+  };
+  const helpers = [
+    "getGraphBlockRange",
+    "getGraphBlockAbsoluteRange"
+  ].map(extractFunction).join("\n");
+
+  vm.runInNewContext(
+    `${helpers}\nresult = getGraphBlockRange(block, graphRange);`,
+    context
+  );
+  return JSON.parse(JSON.stringify(context.result));
+}
+
+test("overnight APAC graph range starts on the previous evening", () => {
   assert.deepEqual(runRange("19:00", "07:00"), {
     range: {
-      start: 18 * 60,
-      end: 32 * 60,
+      start: -6 * 60,
+      end: 8 * 60,
       duration: 14 * 60,
       startTime: "18:00",
       endTime: "08:00"
     },
-    sourceDates: ["2026-08-17", "2026-08-18"]
+    sourceDates: ["2026-08-16", "2026-08-17"]
+  });
+});
+
+test("overnight APAC graph range keeps previous-evening schedules visible", () => {
+  const { range } = runRange("19:00", "07:00");
+  assert.deepEqual(runVisibleBlock({
+    date: "2026-08-17",
+    sourceDate: "2026-08-16",
+    endSourceDate: "2026-08-17",
+    start: "21:00",
+    end: "04:00"
+  }, range), {
+    start: -3 * 60,
+    end: 4 * 60
   });
 });
 

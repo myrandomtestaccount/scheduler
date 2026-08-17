@@ -4273,7 +4273,8 @@ function getGlobalScheduleGraphTimeRange() {
   }
 
   const startMinutes = toMinutes(getRegionCoverageWindow(asiaRegion.id).start)
-    - SCHEDULE_GRAPH_PADDING_MINUTES;
+    - SCHEDULE_GRAPH_PADDING_MINUTES
+    - 24 * 60;
   return createGraphTimeRange(startMinutes, startMinutes + GLOBAL_SCHEDULE_GRAPH_DURATION_MINUTES);
 }
 
@@ -4281,7 +4282,7 @@ function createPaddedGraphTimeRange(start, end) {
   const startMinutes = toMinutes(start) - SCHEDULE_GRAPH_PADDING_MINUTES;
   const endMinutes = toMinutes(end) + SCHEDULE_GRAPH_PADDING_MINUTES;
   return toMinutes(end) <= toMinutes(start)
-    ? createGraphTimeRange(startMinutes, endMinutes + 24 * 60)
+    ? createGraphTimeRange(startMinutes - 24 * 60, endMinutes)
     : createGraphTimeRange(startMinutes, endMinutes);
 }
 
