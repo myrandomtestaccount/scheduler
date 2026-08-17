@@ -4414,16 +4414,17 @@ function getGraphBlocksForUser(user, date, day, options = {}) {
     }];
   }
 
-  const sourceDates = getGraphSourceDatesForRange(date);
   const graphView = options.view || elements.scheduleViewSelect?.value || "week";
+  const sourceDates = getGraphSourceDatesForRange(date);
   const timedOooSourceDates = getTimedOooSourceDatesForGraph(date, getScheduleGraphTimeRange(), graphView);
-  const scheduleBlocks = getGraphScheduleBlocksForDate(user, date, day)
+  const scheduleBlocks = getGraphScheduleBlocksForDate(user, date, day, { view: graphView })
     .map((window) => ({
       type: "schedule",
       id: window.id,
       userId: user.id,
       date,
       sourceDate: window.sourceDate || date,
+      endSourceDate: window.endSourceDate || null,
       removeDate: window.removeDate || window.sourceDate || date,
       start: window.start,
       end: window.end,
@@ -4478,16 +4479,39 @@ function getGraphBlocksForUser(user, date, day, options = {}) {
   return scheduleBlocks.concat(extraBlocks, breakBlocks, oooBreakBlocks).sort(compareGraphBlocks);
 }
 
-function getGraphScheduleBlocksForDate(user, date, day = getDayNameFromDate(date)) {
+function getGraphScheduleBlocksForDate(user, date, day = getDayNameFromDate(date), options = {}) {
   return user.schedules
-    .flatMap((schedule) => getGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day))
+    .flatMap((schedule) => getGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day, options))
     .sort(compareGraphBlocks);
 }
 
-function getGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date)) {
+function getGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date), options = {}) {
+  if (options.view === "week") {
+    return getWeekGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day)
+      .filter((block) => isGraphBlockVisible(block));
+  }
+
   return getScheduleSegmentsForDate(schedule, date, {
     inferredStartDayOffset: getInferredScheduleStartDayOffset(schedule, user)
   }).filter((block) => isGraphBlockVisible(block));
+}
+
+function getWeekGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date)) {
+  if (!isValidScheduleTimeRange(schedule?.start, schedule?.end) || !isScheduleActiveOnDate(schedule, date, day)) {
+    return [];
+  }
+
+  return [{
+    id: schedule.id,
+    source: "schedule",
+    date,
+    sourceDate: getScheduleEndpointDate(date, schedule, "start", user),
+    endSourceDate: getScheduleEndpointDate(date, schedule, "end", user),
+    removeDate: date,
+    start: schedule.start,
+    end: schedule.end,
+    priority: schedule.priority
+  }];
 }
 
 function compareGraphBlocks(left, right) {
@@ -9783,9 +9807,7 @@ function getGraphDayOffsetAnchor(startParts, endParts, showDayOffsets) {
 function getGraphEndpointDisplayParts(block, endpoint) {
   const sourceDate = block.sourceDate || block.removeDate || block.date || getScheduleReferenceDate();
   const graphDate = block.date || sourceDate;
-  const endpointDate = endpoint === "end" && toMinutes(block.end) <= toMinutes(block.start)
-    ? formatDate(addDays(parseDate(sourceDate), 1))
-    : sourceDate;
+  const endpointDate = getGraphEndpointSourceDate(block, endpoint, sourceDate);
   const endpointTime = endpoint === "start" ? block.start : block.end;
   const instant = zonedWallTimeToDate(endpointDate, endpointTime, EASTERN_TIME_ZONE);
   const timezone = getSelectedDisplayTimezone();
@@ -9796,6 +9818,20 @@ function getGraphEndpointDisplayParts(block, endpoint) {
     dayOffset,
     abbreviation: getTimezoneAbbreviation(instant, timezone)
   };
+}
+
+function getGraphEndpointSourceDate(block, endpoint, sourceDate) {
+  if (endpoint !== "end") {
+    return sourceDate;
+  }
+
+  if (block.endSourceDate) {
+    return block.endSourceDate;
+  }
+
+  return toMinutes(block.end) <= toMinutes(block.start)
+    ? formatDate(addDays(parseDate(sourceDate), 1))
+    : sourceDate;
 }
 
 function formatGraphDayOffsetLabel(offset) {
@@ -9865,9 +9901,11 @@ function getGraphBlockAbsoluteRange(block) {
   const graphDate = block.date || getScheduleReferenceDate();
   const sourceDate = block.sourceDate || block.removeDate || graphDate;
   const startMinutes = getDateOffset(graphDate, sourceDate) * 24 * 60 + toMinutes(block.start);
-  const endSourceDate = toMinutes(block.end) <= toMinutes(block.start)
-    ? formatDate(addDays(parseDate(sourceDate), 1))
-    : sourceDate;
+  const endSourceDate = block.endSourceDate || (
+    toMinutes(block.end) <= toMinutes(block.start)
+      ? formatDate(addDays(parseDate(sourceDate), 1))
+      : sourceDate
+  );
   let endMinutes = getDateOffset(graphDate, endSourceDate) * 24 * 60 + toMinutes(block.end);
   if (endMinutes <= startMinutes) {
     endMinutes += 24 * 60;

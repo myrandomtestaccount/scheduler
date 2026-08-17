@@ -65,6 +65,17 @@ test("graph labels show t+1 when both endpoints display on tomorrow", () => {
   );
 });
 
+test("graph labels show overnight end on tomorrow without hiding the start", () => {
+  assert.equal(
+    formatRange(
+      { time: "18:00", dayOffset: 0, abbreviation: "EDT" },
+      { time: "03:00", dayOffset: 1, abbreviation: "EDT" },
+      { includeTimezone: false }
+    ),
+    "18:00–03:00 (t+1)"
+  );
+});
+
 test("graph labels show t-1 when both endpoints display on yesterday", () => {
   assert.equal(
     formatRange(
