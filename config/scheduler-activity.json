@@ -1,0 +1,187 @@
+{
+  "queues": {
+    "abc": 0,
+    "def": 0
+  },
+  "queueBaselines": {
+    "global": {
+      "abc": 0,
+      "def": 0
+    },
+    "regional": {
+      "amer": {
+        "abc": 0,
+        "def": 0
+      },
+      "emea": {
+        "def": 0
+      },
+      "apac": {
+        "abc": 0,
+        "def": 0
+      }
+    }
+  },
+  "delegations": [],
+  "exceptions": [],
+  "holidays": [],
+  "assignmentLog": [
+    {
+      "id": "da32a158-2230-46ed-9e36-941adfc819ab",
+      "assignedAt": "2026-08-07T02:10:34.509Z",
+      "devMode": false,
+      "easternDate": "2026-08-07",
+      "easternTime": "07:00",
+      "systemId": "__shift_queue__",
+      "systemName": "Shift queue",
+      "regionId": "",
+      "regionName": "All regions",
+      "queuePosition": 1,
+      "queuePositionLabel": "1st in line",
+      "queuePositionType": "queue",
+      "serviceNowConfigItem": "",
+      "userId": "ara",
+      "userName": "Ara"
+    },
+    {
+      "id": "69f22937-1b44-4996-b736-7db73c9b7034",
+      "assignedAt": "2026-08-07T02:09:06.519Z",
+      "devMode": false,
+      "easternDate": "2026-08-07",
+      "easternTime": "08:00",
+      "systemId": "__shift_queue__",
+      "systemName": "Shift queue",
+      "regionId": "",
+      "regionName": "All regions",
+      "queuePosition": 2,
+      "queuePositionLabel": "2nd in line",
+      "queuePositionType": "queue",
+      "serviceNowConfigItem": "",
+      "userId": "ty-1",
+      "userName": "Ty 1"
+    },
+    {
+      "id": "4ed8e926-bb85-424c-be16-933891db7cee",
+      "assignedAt": "2026-08-07T02:10:32.113Z",
+      "devMode": false,
+      "easternDate": "2026-08-07",
+      "easternTime": "09:00",
+      "systemId": "__shift_queue__",
+      "systemName": "Shift queue",
+      "regionId": "",
+      "regionName": "All regions",
+      "queuePosition": 3,
+      "queuePositionLabel": "3rd in line",
+      "queuePositionType": "queue",
+      "serviceNowConfigItem": "",
+      "userId": "gide",
+      "userName": "Gide"
+    },
+    {
+      "id": "2e96328b-7275-41f1-af32-601503b3ba46",
+      "assignedAt": "2026-08-14T02:09:30.269Z",
+      "devMode": false,
+      "easternDate": "2026-08-14",
+      "easternTime": "09:00",
+      "systemId": "__shift_queue__",
+      "systemName": "Shift queue",
+      "regionId": "",
+      "regionName": "All regions",
+      "queuePosition": 1,
+      "queuePositionLabel": "1st in line",
+      "queuePositionType": "queue",
+      "serviceNowConfigItem": "",
+      "userId": "ara",
+      "userName": "Ara"
+    },
+    {
+      "id": "4a6650c9-ac2a-4a18-aed5-afbf57258bce",
+      "assignedAt": "2026-08-14T02:09:43.021Z",
+      "devMode": false,
+      "easternDate": "2026-08-14",
+      "easternTime": "09:00",
+      "systemId": "__shift_queue__",
+      "systemName": "Shift queue",
+      "regionId": "",
+      "regionName": "All regions",
+      "queuePosition": 1,
+      "queuePositionLabel": "1st in line",
+      "queuePositionType": "queue",
+      "serviceNowConfigItem": "",
+      "userId": "ara",
+      "userName": "Ara"
+    },
+    {
+      "id": "2c702a26-bc77-4592-80b6-b989f775d967",
+      "assignedAt": "2026-08-14T02:09:51.597Z",
+      "devMode": false,
+      "easternDate": "2026-08-14",
+      "easternTime": "09:00",
+      "systemId": "__shift_queue__",
+      "systemName": "Shift queue",
+      "regionId": "",
+      "regionName": "All regions",
+      "serviceNowConfigItem": "",
+      "userId": "gide",
+      "userName": "Gide",
+      "assignmentEdit": {
+        "type": "amended",
+        "editedAt": "2026-08-14T02:18:38.975Z",
+        "previousUserId": "ara",
+        "previousUserName": "Ara",
+        "previousSystemId": "__shift_queue__",
+        "previousSystemName": "Shift queue",
+        "queueCorrected": false
+      },
+      "amendedAt": "2026-08-14T02:18:38.975Z"
+    },
+    {
+      "id": "2d1c13b4-228c-46af-9dfd-7370b3b12697",
+      "assignedAt": "2026-08-14T02:10:03.972Z",
+      "devMode": false,
+      "easternDate": "2026-08-14",
+      "easternTime": "09:00",
+      "systemId": "__shift_queue__",
+      "systemName": "Shift queue",
+      "regionId": "",
+      "regionName": "All regions",
+      "queuePosition": 3,
+      "queuePositionLabel": "3rd in line",
+      "queuePositionType": "queue",
+      "serviceNowConfigItem": "",
+      "userId": "gide",
+      "userName": "Gide",
+      "assignmentEdit": {
+        "type": "reassigned",
+        "editedAt": "2026-08-14T02:25:36.563Z",
+        "previousUserId": "ara",
+        "previousUserName": "Ara",
+        "previousSystemId": "__shift_queue__",
+        "previousSystemName": "Shift queue"
+      },
+      "amendedAt": "2026-08-14T02:25:36.563Z"
+    }
+  ],
+  "regionalSettings": {
+    "amer": {
+      "queues": {
+        "abc": 0,
+        "def": 0
+      },
+      "holidays": []
+    },
+    "emea": {
+      "queues": {
+        "def": 0
+      },
+      "holidays": []
+    },
+    "apac": {
+      "queues": {
+        "abc": 0,
+        "def": 0
+      },
+      "holidays": []
+    }
+  }
+}

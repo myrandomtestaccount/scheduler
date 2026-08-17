@@ -13,6 +13,7 @@ const defaultConfigDir = path.join(appRoot, "config");
 const configDir = path.resolve(configuredConfigDir || defaultConfigDir);
 const configFile = path.join(configDir, "scheduler-config.json");
 const activityFile = path.join(configDir, "scheduler-activity.json");
+const legacyStateFile = path.join(configDir, "scheduler-state.json");
 const logFile = path.join(configDir, "scheduler.log");
 const backupDir = path.join(configDir, "backups");
 const BACKUP_TIME_ZONE = "America/New_York";
@@ -170,11 +171,22 @@ async function serveStaticFile(urlPath, request, response) {
 
 async function readStateFile() {
   try {
-    const [configText, activityText] = await Promise.all([
+    const [configText, activityText, legacyText] = await Promise.all([
       readCurrentFileText(configFile),
-      readCurrentFileText(activityFile)
+      readCurrentFileText(activityFile),
+      readCurrentFileText(legacyStateFile)
     ]);
     if (!configText && !activityText) {
+      if (legacyText) {
+        const data = JSON.parse(legacyText);
+        validateSchedulerData(data);
+        return {
+          exists: true,
+          revision: getLegacyStateRevision(legacyText),
+          data
+        };
+      }
+
       return { exists: false, revision: null, data: null };
     }
 
@@ -376,6 +388,13 @@ function getStateRevision(configText, activityText) {
     configText || "",
     "scheduler-activity",
     activityText || ""
+  ].join("\n"));
+}
+
+function getLegacyStateRevision(legacyText) {
+  return hashText([
+    "scheduler-state",
+    legacyText || ""
   ].join("\n"));
 }
 
