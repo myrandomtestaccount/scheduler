@@ -4273,8 +4273,7 @@ function getGlobalScheduleGraphTimeRange() {
   }
 
   const startMinutes = toMinutes(getRegionCoverageWindow(asiaRegion.id).start)
-    - SCHEDULE_GRAPH_PADDING_MINUTES
-    - 24 * 60;
+    - SCHEDULE_GRAPH_PADDING_MINUTES;
   return createGraphTimeRange(startMinutes, startMinutes + GLOBAL_SCHEDULE_GRAPH_DURATION_MINUTES);
 }
 
@@ -4282,7 +4281,7 @@ function createPaddedGraphTimeRange(start, end) {
   const startMinutes = toMinutes(start) - SCHEDULE_GRAPH_PADDING_MINUTES;
   const endMinutes = toMinutes(end) + SCHEDULE_GRAPH_PADDING_MINUTES;
   return toMinutes(end) <= toMinutes(start)
-    ? createGraphTimeRange(startMinutes - 24 * 60, endMinutes)
+    ? createGraphTimeRange(startMinutes, endMinutes + 24 * 60)
     : createGraphTimeRange(startMinutes, endMinutes);
 }
 
@@ -4485,18 +4484,12 @@ function getGraphScheduleBlocksForDate(user, date, day = getDayNameFromDate(date
     .sort(compareGraphBlocks);
 }
 
-function getGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date), options = {}) {
-  if (options.view === "week") {
-    return getWeekGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day)
-      .filter((block) => isGraphBlockVisible(block));
-  }
-
-  return getScheduleSegmentsForDate(schedule, date, {
-    inferredStartDayOffset: getInferredScheduleStartDayOffset(schedule, user)
-  }).filter((block) => isGraphBlockVisible(block));
+function getGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date)) {
+  return getAssignedDayGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day)
+    .filter((block) => isGraphBlockVisible(block));
 }
 
-function getWeekGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date)) {
+function getAssignedDayGraphScheduleBlocksForScheduleOnDate(schedule, user, date, day = getDayNameFromDate(date)) {
   if (!isValidScheduleTimeRange(schedule?.start, schedule?.end) || !isScheduleActiveOnDate(schedule, date, day)) {
     return [];
   }

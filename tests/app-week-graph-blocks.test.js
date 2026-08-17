@@ -48,7 +48,7 @@ function extractFunction(name) {
   throw new Error(`Could not extract ${name}`);
 }
 
-function runWeekBlock(schedule) {
+function runGraphBlock(schedule, view) {
   const context = {
     schedule,
     user: { id: "asia-user", schedules: [schedule] },
@@ -68,24 +68,24 @@ function runWeekBlock(schedule) {
     ),
     isGraphBlockVisible: () => true,
     getScheduleSegmentsForDate: () => {
-      throw new Error("Week view must not use split daily schedule segments.");
+      throw new Error("Schedule graphs must not use split daily schedule segments.");
     },
     getInferredScheduleStartDayOffset: () => 0
   };
   const helpers = [
     "getGraphScheduleBlocksForScheduleOnDate",
-    "getWeekGraphScheduleBlocksForScheduleOnDate"
+    "getAssignedDayGraphScheduleBlocksForScheduleOnDate"
   ].map(extractFunction).join("\n");
 
   vm.runInNewContext(
-    `${helpers}\nresult = getGraphScheduleBlocksForScheduleOnDate(schedule, user, "2026-08-17", "Monday", { view: "week" });`,
+    `${helpers}\nresult = getGraphScheduleBlocksForScheduleOnDate(schedule, user, "2026-08-17", "Monday", { view: ${JSON.stringify(view)} });`,
     context
   );
   return JSON.parse(JSON.stringify(context.result));
 }
 
-test("week graph keeps overnight schedules as one assigned-day block", () => {
-  assert.deepEqual(runWeekBlock({
+function overnightSchedule() {
+  return {
     id: "overnight",
     days: ["Monday"],
     startDate: "2026-08-17",
@@ -94,14 +94,24 @@ test("week graph keeps overnight schedules as one assigned-day block", () => {
     endEndpointDate: "2026-08-18",
     start: "18:00",
     end: "03:00"
-  }), [{
-    id: "overnight",
-    source: "schedule",
-    date: "2026-08-17",
-    sourceDate: "2026-08-17",
-    endSourceDate: "2026-08-18",
-    removeDate: "2026-08-17",
-    start: "18:00",
-    end: "03:00"
-  }]);
+  };
+}
+
+const expectedOvernightBlock = [{
+  id: "overnight",
+  source: "schedule",
+  date: "2026-08-17",
+  sourceDate: "2026-08-17",
+  endSourceDate: "2026-08-18",
+  removeDate: "2026-08-17",
+  start: "18:00",
+  end: "03:00"
+}];
+
+test("week graph keeps overnight schedules as one assigned-day block", () => {
+  assert.deepEqual(runGraphBlock(overnightSchedule(), "week"), expectedOvernightBlock);
+});
+
+test("day graph keeps overnight schedules as one assigned-day block", () => {
+  assert.deepEqual(runGraphBlock(overnightSchedule(), "day"), expectedOvernightBlock);
 });
