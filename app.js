@@ -9781,7 +9781,8 @@ function formatGraphTimeRangeForDisplay(block, { includeTimezone = true } = {}) 
   const timezoneLabel = start.abbreviation === end.abbreviation
     ? start.abbreviation
     : `${start.abbreviation}/${end.abbreviation}`;
-  const range = `${formatGraphEndpointPartLabel(start, showDayOffsets, anchorDayOffset)}–${formatGraphEndpointPartLabel(end, showDayOffsets, anchorDayOffset)}`;
+  const rangeSeparator = showDayOffsets ? "-" : "–";
+  const range = `${formatGraphEndpointPartLabel(start, showDayOffsets, anchorDayOffset)}${rangeSeparator}${formatGraphEndpointPartLabel(end, showDayOffsets, anchorDayOffset)}`;
   return includeTimezone ? `${range} ${timezoneLabel}` : range;
 }
 
@@ -9833,7 +9834,7 @@ function formatGraphDayOffsetLabel(offset) {
   }
 
   const marker = offset > 0 ? `+${offset}` : `-${Math.abs(offset)}`;
-  return ` (t${marker})`;
+  return `(T${marker})`;
 }
 
 function timeRangeStyle(block) {

@@ -54,14 +54,14 @@ function formatRange(start, end, options = {}) {
   return context.result;
 }
 
-test("graph labels show t+1 when both endpoints display on tomorrow", () => {
+test("graph labels show T+1 when both endpoints display on tomorrow", () => {
   assert.equal(
     formatRange(
       { time: "00:00", dayOffset: 1, abbreviation: "EDT" },
       { time: "03:00", dayOffset: 1, abbreviation: "EDT" },
       { includeTimezone: false }
     ),
-    "00:00 (t+1)–03:00 (t+1)"
+    "00:00(T+1)-03:00(T+1)"
   );
 });
 
@@ -72,18 +72,18 @@ test("graph labels show overnight end on tomorrow without hiding the start", () 
       { time: "03:00", dayOffset: 1, abbreviation: "EDT" },
       { includeTimezone: false }
     ),
-    "18:00–03:00 (t+1)"
+    "18:00-03:00(T+1)"
   );
 });
 
-test("graph labels show t-1 when both endpoints display on yesterday", () => {
+test("graph labels show T-1 when both endpoints display on yesterday", () => {
   assert.equal(
     formatRange(
       { time: "18:00", dayOffset: -1, abbreviation: "EDT" },
       { time: "23:59", dayOffset: -1, abbreviation: "EDT" },
       { includeTimezone: false }
     ),
-    "18:00 (t-1)–23:59 (t-1)"
+    "18:00(T-1)-23:59(T-1)"
   );
 });
 
