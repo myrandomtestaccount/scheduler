@@ -6,6 +6,4 @@ obj/
 *.user
 *.suo
 *.log
-config/*
-!config/scheduler-config.json
-!config/scheduler-activity.json
+config/

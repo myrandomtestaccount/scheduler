@@ -1144,12 +1144,11 @@ fieldset {
 
 .queue-message {
   color: var(--muted);
-  display: -webkit-box;
+  display: block;
   font-size: 0.8rem;
   font-weight: 650;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   line-height: 1.22;
+  max-height: calc(1.22em * 2);
   overflow: hidden;
 }
 

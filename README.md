@@ -174,7 +174,7 @@ On macOS, Windows, and Linux this folder lives inside the scheduler project dire
 
 `scheduler-activity.json` stores operational activity: current queue positions, queue baselines, recent assignments, OOO/break records, extra availability slots, and delegation assignments.
 
-These two shared JSON files are tracked with the project so pulling the latest `main` brings the current scheduler setup and queue data to another computer.
+These two shared JSON files are local to each environment and ignored by Git. Use export/import or copy the `config` folder intentionally when you want to move live scheduler data between computers.
 
 New saves use only these two split files in `config` unless `--config-dir` or `SCHEDULER_CONFIG_DIR` is set. If an older `config/scheduler-state.json` file is present and the split files are missing, the server loads it automatically and writes the split files on the next save.
 
